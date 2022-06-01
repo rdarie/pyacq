@@ -29,11 +29,11 @@ for device in dev.list_device_specs():
     print("  %s %d: %s" % (star, index, device['name']))
 
 # Configure PyAudio device with a single (default) input channel.
-dev.configure(nb_channel=1, sample_rate=44100., input_device_index=default_input,
-              format='int16', chunksize=1024)
+dev.configure(
+    nb_channel=1, sample_rate=44100., input_device_index=default_input,
+    format='int16', chunksize=1024)
 dev.output.configure(protocol='tcp', interface='127.0.0.1', transfermode='plaindata')
 dev.initialize()
-
 
 # Create an oscilloscope to display data.
 viewer = QOscilloscope()

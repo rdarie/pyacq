@@ -9,9 +9,10 @@ values.
 
 """
 import numpy as np
-from pyacq.devices import NoiseGenerator
+
 from pyacq.core import Node, register_node_type
 from pyqtgraph.Qt import QtCore, QtGui
+from pyacq.devices import NoiseGenerator
 
 if __name__ == '__main__':
     from pyacq.viewers import QOscilloscope
@@ -19,7 +20,7 @@ if __name__ == '__main__':
     
     # Create a noise generator node
     ng = NoiseGenerator()
-    ng.configure()
+    ng.configure(num_chans=10)
     ng.output.configure(protocol='inproc', transfermode='sharedmem')
     ng.initialize()
     

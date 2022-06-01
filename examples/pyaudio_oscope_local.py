@@ -34,7 +34,6 @@ dev.configure(nb_channel=1, sample_rate=44100., input_device_index=default_input
 dev.output.configure(protocol='tcp', interface='127.0.0.1', transfermode='plaindata')
 dev.initialize()
 
-
 # Create an oscilloscope to display data.
 viewer = QOscilloscope()
 viewer.configure(with_user_dialog = True)
@@ -50,7 +49,6 @@ viewer.by_channel_params['Signal0', 'gain'] = 0.001
 # Start both nodes
 dev.start()
 viewer.start()
-
 
 if __name__ == '__main__':
     import sys

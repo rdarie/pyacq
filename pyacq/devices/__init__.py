@@ -12,3 +12,4 @@ from .eeg_openBCI import OpenBCI
 from .ni_daqmx import NIDAQmx
 from .blackrock import Blackrock
 from .openephys_gui_relay import OpenEphysGUIRelay
+from .noise_generator import NoiseGenerator
