@@ -354,8 +354,9 @@ class QTimeFreq(WidgetNode):
             self.filter_sos = None
         
         for worker in self.workers:
-            worker.on_fly_change_wavelet(wavelet_fourrier=self.wavelet_fourrier, downsample_factor=self.downsample_factor,
-                        sig_chunk_size=self.sig_chunk_size, plot_length=self.plot_length, filter_sos=self.filter_sos)
+            worker.on_fly_change_wavelet(
+                wavelet_fourrier=self.wavelet_fourrier, downsample_factor=self.downsample_factor,
+                sig_chunk_size=self.sig_chunk_size, plot_length=self.plot_length, filter_sos=self.filter_sos)
 
         
         for input_map in self.input_maps:
@@ -669,7 +670,8 @@ class TimeFreqWorker(Node, QtCore.QObject):
         if not self.local:
             # with our RPC ndarray came from np.frombuffer
             # but scipy.signal.filtflt need b writtable so:
-            p['filter_sos'] = p['filter_sos'].copy()
+            if p['filter_sos'] is not None:
+                p['filter_sos'] = p['filter_sos'].copy()
         
         p['out_shape'] = (p['plot_length'], p['wavelet_fourrier'].shape[1])
         self.output.params['shape'] = p['out_shape']

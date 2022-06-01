@@ -9,10 +9,8 @@ from pyacq.devices.audio_pyaudio import PyAudio
 from pyacq.viewers import QTriggeredOscilloscope
 import pyqtgraph as pg
 
-
 # Start Qt application
 app = pg.mkQApp()
-
 
 # Create PyAudio device node
 dev = PyAudio()
@@ -27,11 +25,11 @@ for device in dev.list_device_specs():
     print("  %s %d: %s" % (star, index, device['name']))
 
 # Configure PyAudio device with a single (default) input channel.
-dev.configure(nb_channel=1, sample_rate=44100., input_device_index=default_input,
-              format='int16', chunksize=1024)
+dev.configure(
+    nb_channel=1, sample_rate=44100., input_device_index=default_input,
+    format='int16', chunksize=1024)
 dev.output.configure(protocol='tcp', interface='127.0.0.1', transfermode='plaindata')
 dev.initialize()
-
 
 # Create a triggered oscilloscope to display data.
 viewer = QTriggeredOscilloscope()
@@ -52,7 +50,6 @@ viewer.trigger.params['debounce_time'] = 0.1
 viewer.triggeraccumulator.params['stack_size'] = 3
 viewer.triggeraccumulator.params['left_sweep'] = -.2
 viewer.triggeraccumulator.params['right_sweep'] = .5
-
 
 # Start both nodes
 dev.start()

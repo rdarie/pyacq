@@ -38,7 +38,6 @@ class StreamMonitor(Node):
     def data_received(self, ptr, data):
         print("Data received: %d %s %s" % (ptr, data.shape, data.dtype))
     
-    
 
 # Not necessary for this example, but registering the node class would make it
 # easier for us to instantiate this type of node in a remote process via

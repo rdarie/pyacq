@@ -17,8 +17,9 @@ from pyqtgraph.Qt import QtCore, QtGui
 class NoiseGenerator(Node):
     """A simple example node that generates gaussian noise.
     """
-    _output_specs = {'signals': dict(streamtype='analogsignal', dtype='float32',
-                                     shape=(-1, 1), compression='')}
+    _output_specs = {
+        'signals': dict(streamtype='analogsignal', dtype='float32',
+        shape=(-1, 1), compression='')}
 
     def __init__(self, **kargs):
         Node.__init__(self, **kargs)
@@ -56,7 +57,6 @@ class NoiseGenerator(Node):
 register_node_type(NoiseGenerator)
 
 
-
 if __name__ == '__main__':
     from pyacq.viewers import QOscilloscope
     app = QtGui.QApplication([])
@@ -77,4 +77,6 @@ if __name__ == '__main__':
     # start both nodes
     osc.start()
     ng.start()
-    
+
+    # start the app
+    app.exec_()
