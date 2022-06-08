@@ -217,10 +217,11 @@ class QTimeFreq(WidgetNode):
         # This is used to diffred heavy action whena changing params (setting plots, compute wavelet, ...)
         # this avoid overload on CPU if multiple changes occurs in a short time
         self.mutex_action = Mutex()
-        self.actions = OrderedDict([(self.create_grid, False),
-                                                    (self.initialize_time_freq, False),
-                                                    (self.initialize_plots, False),
-                                                    ])
+        self.actions = OrderedDict([
+            (self.create_grid, False),
+            (self.initialize_time_freq, False),
+            (self.initialize_plots, False),
+            ])
         self.timer_action = QtCore.QTimer(singleShot=True, interval=300)
         self.timer_action.timeout.connect(self.apply_actions)
         
@@ -313,7 +314,7 @@ class QTimeFreq(WidgetNode):
             else:
                 plot.setTitle(None)
 
-            self.graphiclayout.ci.layout.addItem(plot, r, c)  # , rowspan, colspan)
+            self.graphiclayout.ci.addItem(plot, r, c)  # , rowspan, colspan)
             if r not in self.graphiclayout.ci.rows:
                 self.graphiclayout.ci.rows[r] = {}
             self.graphiclayout.ci.rows[r][c] = plot

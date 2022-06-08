@@ -129,9 +129,6 @@ class QOscilloscopeMultiPlot(BaseOscilloscope):
         if self.params_controller is not None:
             viewBox.xsize_zoom.connect(self.apply_xsize_zoom)
         
-        
-        
-            
         self.params.param('xsize').setLimits([2./self.sample_rate, self.max_xsize*.95])
         
         self.curves = []

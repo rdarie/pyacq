@@ -58,7 +58,8 @@ class BaseOscilloscope(WidgetNode):
     
     #In the code  willingly : self.input is self.inputs['signal'] because some subclass can have several inputs
     
-    def __init__(self, **kargs):
+    def __init__(
+            self, **kargs):
         WidgetNode.__init__(self, **kargs)
         
         self.layout = QtGui.QVBoxLayout()
@@ -82,9 +83,13 @@ class BaseOscilloscope(WidgetNode):
         self.params_controller.show()
         # TODO deal with modality
     
-    def _configure(self, with_user_dialog=True, max_xsize=60.):
+    def _configure(
+            self, with_user_dialog=True, max_xsize=60.,
+            window_label='oscilloscope0'):
         self.with_user_dialog = with_user_dialog
         self.max_xsize = max_xsize
+        self.name = window_label
+        self.setWindowTitle(self.name)
     
 
     def _check_nb_channel(self):
@@ -112,10 +117,12 @@ class BaseOscilloscope(WidgetNode):
             by_chan_p = [{'name': 'label', 'type': 'str', 'value': self.channel_names[i], 'readonly':True}] + list(self._default_by_channel_params)
             all.append({'name': 'ch{}'.format(i), 'type': 'group', 'children': by_chan_p})
         self.by_channel_params = pg.parametertree.Parameter.create(name='AnalogSignals', type='group', children=all)
-        self.params = pg.parametertree.Parameter.create(name='Global options',
-                                                    type='group', children=self._default_params)
-        self.all_params = pg.parametertree.Parameter.create(name='all param',
-                                    type='group', children=[self.params, self.by_channel_params])
+        self.params = pg.parametertree.Parameter.create(
+            name='Global options',
+            type='group', children=self._default_params)
+        self.all_params = pg.parametertree.Parameter.create(
+            name='all param',
+            type='group', children=[self.params, self.by_channel_params])
         self.all_params.sigTreeStateChanged.connect(self.on_param_change)
         
         

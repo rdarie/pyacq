@@ -3,10 +3,11 @@
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
 import numpy as np
-
+import pdb
 from .sharedarray import SharedMem, SharedArray
 from .arraytools import make_dtype
 
+verbose = False
 
 class RingBuffer:
     """Class that collects data as it arrives from an InputStream and writes it
@@ -17,7 +18,10 @@ class RingBuffer:
     allow faster, copyless reads at the expense of doubled write time and memory
     footprint.
     """
-    def __init__(self, shape, dtype, double=True, shmem=None, fill=None, axisorder=None):
+    def __init__(
+            self, shape, dtype,
+            double=True, shmem=None,
+            fill=None, axisorder=None):
         self.double = double
         self.shape = shape
         
@@ -32,7 +36,8 @@ class RingBuffer:
         
         shape = (shape[0] * (2 if double else 1),) + shape[1:]
         nativeshape = np.array(shape)[self.axisorder]
-        
+        if verbose:
+            print('class RingBuffer: shape = {}; nativeshape = {}'.format(shape, nativeshape))
         # initialize int buffers with 0 and float buffers with nan
         if fill is None:
             fill = 0 if make_dtype(dtype).kind in 'ui' else np.nan
@@ -45,7 +50,7 @@ class RingBuffer:
             self._shmem = None
             self.shm_id = None
         else:
-            size = np.product(shape) * make_dtype(dtype).itemsize + 16
+            size = int(np.product(shape) * make_dtype(dtype).itemsize + 16)
             if shmem is True:
                 # create new shared memory buffer
                 self._shmem = SharedMem(nbytes=size)

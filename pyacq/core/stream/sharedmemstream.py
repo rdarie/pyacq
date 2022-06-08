@@ -4,7 +4,7 @@
 
 import struct
 import numpy as np
-
+import pdb
 from .streamhelpers import DataSender, DataReceiver, register_transfermode
 from .ringbuffer import RingBuffer
 from .arraytools import make_dtype
@@ -33,18 +33,21 @@ class SharedMemSender(DataSender):
         DataSender.__init__(self, socket, params)
         self.size = self.params['buffer_size']
         shape = (self.size,) + tuple(self.params['shape'][1:])
-        self._buffer = RingBuffer(shape=shape, dtype=make_dtype(self.params['dtype']),
-                                  shmem=True, axisorder=self.params['axisorder'],
-                                  double=self.params['double'], fill=self.params['fill'])
+        self._buffer = RingBuffer(
+            shape=shape, dtype=make_dtype(self.params['dtype']),
+            shmem=True, axisorder=self.params['axisorder'],
+            double=self.params['double'], fill=self.params['fill'])
         self.params['shm_id'] = self._buffer.shm_id
     
     def send(self, index, data):
         assert data.dtype == self.params['dtype']
         shape = data.shape
         if self.params['shape'][0] != -1:
-            assert shape == self.params['shape']
+            errorMessage = "class SharedMemSender(DataSender)\n\tdata.shape ({}) != params['shape'] ({})".format(shape, self.params['shape'])
+            assert shape == self.params['shape'], errorMessage
         else:
-            assert tuple(shape[1:]) == tuple(self.params['shape'][1:]), '{} {}'.format(shape, self.params['shape'])
+            errorMessage = "class SharedMemSender(DataSender)\n\ttuple(data.shape[1:]) ({}) != tuple(params['shape'][1:] ({})".format(tuple(shape[1:]), tuple(self.params['shape'][1:]))
+            assert tuple(shape[1:]) == tuple(self.params['shape'][1:]), errorMessage
  
         self._buffer.new_chunk(data, index)
         
@@ -62,8 +65,9 @@ class SharedMemReceiver(DataReceiver):
 
         self.size = self.params['buffer_size']
         shape = (self.size,) + tuple(self.params['shape'][1:])
-        self.buffer = RingBuffer(shape=shape, dtype=self.params['dtype'], double=self.params['double'],
-                                 shmem=self.params['shm_id'], axisorder=self.params['axisorder'])
+        self.buffer = RingBuffer(
+        shape=shape, dtype=self.params['dtype'], double=self.params['double'],
+        shmem=self.params['shm_id'], axisorder=self.params['axisorder'])
 
     def recv(self, return_data=False):
         """Receive message indicating the index of the next data chunk.

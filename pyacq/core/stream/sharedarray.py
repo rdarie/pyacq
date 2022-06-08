@@ -3,11 +3,13 @@
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
 import numpy as np
-import sys, random, string, tempfile, mmap
+import sys, random, string, tempfile, mmap, os
+from multiprocessing import shared_memory
 
 
 # TODO
 # On POSIX system it can optionally the shm_open way to avoid mmap.
+verbose = False
 
 class SharedMem:
     """Class to create a shared memory buffer.
@@ -24,37 +26,29 @@ class SharedMem:
     shm_id : str or None
         The id of an existing SharedMem to open. If None, then a new shared
         memory file is created.
-        On linux this is the filename, on Windows this is the tagname.
     
     """
     def __init__(self, nbytes, shm_id=None):
         self.nbytes = nbytes
-        self.mmap_size = (self.nbytes // mmap.PAGESIZE + 1) * mmap.PAGESIZE
+        self.shm_size = (self.nbytes // mmap.PAGESIZE + 1) * mmap.PAGESIZE
         self.shm_id = shm_id
-        
-        if sys.platform.startswith('win'):
-            if shm_id is None:
-                self.shm_id = u'pyacq_SharedMem_'+''.join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(128))
-                self.mmap = mmap.mmap(-1, self.nbytes, self.shm_id, access=mmap.ACCESS_WRITE)
-            else:
-                self.mmap = mmap.mmap(-1, self.nbytes, self.shm_id, access=mmap.ACCESS_READ)
+        self.pid = os.getpid()
+        if verbose:
+            print('class SharedMem: nbytes = {}; id = {}'.format(self.nbytes, self))
+        if shm_id is None:
+            self.shm_id = u'pyacq_SharedMem_'+''.join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(32))
+            if verbose:
+                print('class SharedMem: writing; pid = {}; shm_size = {}\t\nshm_id = {}'.format(self.pid, self.shm_size, self.shm_id))
+            self.shm = shared_memory.SharedMemory(name=self.shm_id, create=True, size=self.shm_size)
         else:
-            if shm_id is None:
-                self._tmpFile = tempfile.NamedTemporaryFile(prefix=u'pyacq_SharedMem_')
-                self._tmpFile.write(b'\x00' * self.nbytes)
-                self._tmpFile.flush()  # I do not anderstand but this is needed....
-                self.shm_id = self._tmpFile.name
-                self.mmap = mmap.mmap(self._tmpFile.fileno(), self.nbytes, mmap.MAP_SHARED, mmap.PROT_WRITE)
-            else:
-                self._tmpFile = open(self.shm_id, 'rb')
-                self.mmap = mmap.mmap(self._tmpFile.fileno(), self.nbytes, mmap.MAP_SHARED, mmap.PROT_READ)
-                
+            if verbose:
+                print('class SharedMem: reading; pid = {}; shm_size = {}\t\nshm_id = {}'.format(self.pid, self.shm_size, self.shm_id))
+            self.shm = shared_memory.SharedMemory(name=self.shm_id, create=False)
+    
     def close(self):
         """Close this buffer.
         """
-        self.mmap.close()
-        if not sys.platform.startswith('win') and hasattr(self, '_tmpFile'):
-            self._tmpFile.close()
+        self.shm.close()
     
     def to_dict(self):
         """Return a dict that can be serialized and sent to other processes to
@@ -65,8 +59,9 @@ class SharedMem:
     def to_numpy(self, offset, dtype, shape, strides=None):
         """Return a numpy array pointing to part (or all) of this buffer.
         """
-        return np.ndarray(buffer=self.mmap, shape=shape,
-                          strides=strides, offset=offset, dtype=dtype)        
+        return np.ndarray(
+            buffer=self.shm.buf, shape=shape,
+            strides=strides, offset=offset, dtype=dtype)        
         
 
 
@@ -100,12 +95,12 @@ class SharedArray:
     def __init__(self, shape=(1,), dtype='float64', shm_id=None):
         self.shape = shape
         self.dtype = np.dtype(dtype)
-        nbytes = np.prod(shape)*self.dtype.itemsize
+        nbytes = int(np.prod(shape) * self.dtype.itemsize)
         self.shmem = SharedMem(nbytes, shm_id)
     
     def to_dict(self):
         return {'shape': self.shape, 'dtype': self.dtype, 'shm_id': self.shmem.shm_id}
     
     def to_numpy(self):
-        return np.frombuffer(self.shmem.mmap, dtype=self.dtype).reshape(self.shape)
+        return np.frombuffer(self.shmem.shm.buf, dtype=self.dtype).reshape(self.shape)
 

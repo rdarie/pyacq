@@ -13,9 +13,10 @@ class NumpyDeviceBuffer(Node):
     
     This node streams data from a predefined buffer in an endless loop.
     """
-    _output_specs = {'signals': dict(streamtype='analogsignal', 
-                                                shape=(-1, 16), compression ='', sample_rate =30.
-                                                )}
+    _output_specs = {
+        'signals': dict(streamtype='analogsignal', 
+        shape=(-1, 16), compression ='', sample_rate =30.
+        )}
 
     def __init__(self, **kargs):
         Node.__init__(self, **kargs)
@@ -53,7 +54,7 @@ class NumpyDeviceBuffer(Node):
             nloop = 40
             self.length = nloop * self.chunksize
             t = np.arange(self.length) * sample_interval
-            self.buffer = np.random.rand(self.length, nb_channel) * .05
+            self.buffer = np.random.rand(self.length, nb_channel) * .25
             self.buffer += np.sin(2 * np.pi * 440. * t)[:, None] * .5
             self.buffer = self.buffer.astype('float32')
         else:
@@ -62,7 +63,8 @@ class NumpyDeviceBuffer(Node):
             self.buffer = buffer
             self.length = buffer.shape[0]
         
-        self.output.spec['dtype'] = buffer.dtype.name
+        self.output.spec['dtype'] = self.buffer.dtype.name
+        self.output.spec['buffer_size'] = self.length
     
     def after_output_configure(self, outputname):
         if outputname == 'signals':

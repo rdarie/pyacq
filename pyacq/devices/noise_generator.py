@@ -20,12 +20,12 @@ class NoiseGenerator(Node):
 
     def _configure(
             self,
-            chunksize=100, sample_rate=1000., num_chans=1):
+            chunksize=100, sample_rate=1000., nb_channel=1):
         self.chunksize = chunksize
         self.sample_rate = sample_rate
-        self.num_chans = num_chans
+        self.nb_channel = nb_channel
         
-        self.output.spec['shape'] = (-1, self.num_chans)
+        self.output.spec['shape'] = (-1, self.nb_channel)
         self.output.spec['sample_rate'] = sample_rate
         self.output.spec['buffer_size'] = 1000
 
@@ -44,7 +44,7 @@ class NoiseGenerator(Node):
     def send_data(self):
         self.head += self.chunksize
         self.output.send(
-            np.random.normal(size=(self.chunksize, self.num_chans)).astype('float32'),
+            np.random.normal(size=(self.chunksize, self.nb_channel)).astype('float32'),
             index=self.head)
 
 # Not necessary for this example, but registering the node class would make it
