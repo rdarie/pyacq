@@ -75,8 +75,8 @@ class BaseOscilloscope(WidgetNode):
         self.plot = pg.PlotItem(viewBox=self.viewBox)
         self.graphicsview.setCentralItem(self.plot)
         self.plot.hideButtons()
-        self.plot.showAxis('left', False)
-        self.plot.showAxis('bottom', False)
+        self.plot.showAxis('left', True)
+        self.plot.showAxis('bottom', True)
         
         self.all_mean, self.all_sd = None, None
         
@@ -86,11 +86,13 @@ class BaseOscilloscope(WidgetNode):
     
     def _configure(
             self, with_user_dialog=True, max_xsize=60.,
-            window_label='oscilloscope0'):
+            window_label='scope0'):
+        #
         self.with_user_dialog = with_user_dialog
         self.max_xsize = max_xsize
-        self.name = window_label
-        self.setWindowTitle(self.name)
+        #
+        self.window_label = window_label
+        self.setWindowTitle(self.window_label)
     
 
     def _check_nb_channel(self):
@@ -420,8 +422,12 @@ class QOscilloscope(BaseOscilloscope):
         BaseOscilloscope.__init__(self, **kargs)
         
 
-    def _configure(self, with_user_dialog=True, max_xsize = 60.):
-        BaseOscilloscope._configure(self, with_user_dialog=with_user_dialog, max_xsize = max_xsize)
+    def _configure(
+            self, with_user_dialog=True,
+            max_xsize=60., window_label='oscilloscope0'):
+        BaseOscilloscope._configure(
+            self, with_user_dialog=with_user_dialog,
+            max_xsize=max_xsize, window_label=window_label)
 
     def _initialize(self):
         

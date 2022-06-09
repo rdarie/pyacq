@@ -119,9 +119,15 @@ class QTimeFreq(WidgetNode):
     def show_params_controller(self):
         self.params_controller.show()
     
-    def _configure(self, with_user_dialog=True, max_xsize=60., nodegroup_friends=None):
+    def _configure(
+            self, with_user_dialog=True, max_xsize=60.,
+            window_label='tfr0', nodegroup_friends=None):
         self.with_user_dialog = with_user_dialog
         self.max_xsize = max_xsize
+        #
+        self.window_label = window_label
+        self.setWindowTitle(self.window_label)
+        #
         self.nodegroup_friends = nodegroup_friends
         self.local_workers = self.nodegroup_friends is None
         
@@ -506,6 +512,7 @@ class QTimeFreq(WidgetNode):
     def auto_scale(self):
         self.auto_clim()
 
+
 register_node_type(QTimeFreq)
 
 
@@ -551,7 +558,6 @@ def generate_wavelet_fourier(len_wavelet, f_start, f_stop, deltafreq, sample_rat
     wf=wf.conj()
     
     return wf
-
 
 
 class ComputeThread(QtCore.QThread):
@@ -606,7 +612,6 @@ class ComputeThread(QtCore.QThread):
         #~ self.last_wt_map = wt
         self.out_stream.send(wt, index=head)
         #~ t3 = time.time()
-        
         # print('compute', self.channel,  t2-t1, t3-t2, t3-t1, QtCore.QThread.currentThreadId())
 
 
@@ -696,9 +701,8 @@ class TimeFreqWorker(Node, QtCore.QObject):
         self.thread.head = head
         self.thread.start()
 
+
 register_node_type(TimeFreqWorker)
-
-
 
 
 class TimeFreqController(QtGui.QWidget):

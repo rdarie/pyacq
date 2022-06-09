@@ -9,14 +9,17 @@ import numpy as np
 
 from ephyviewer.myqt import QT
 import pyqtgraph as pg
-
+import pdb
 from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamController
-from ephyviewer.datasource import InMemoryAnalogSignalSource, AnalogSignalSourceWithScatter, NeoAnalogSignalSource, AnalogSignalFromNeoRawIOSource
+from ephyviewer.datasource import InMemoryAnalogSignalSource, AnalogSignalSourceWithScatter, NeoAnalogSignalSource, AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource
 from ephyviewer.tools import mkCachedBrush
+
+from ..core import (WidgetNode, register_node_type, InputStream,
+        ThreadPollInput, StreamConverter)
 
 default_params = [
     {'name': 'xsize', 'type': 'float', 'value': 3., 'step': 0.1},
-    {'name': 'xratio', 'type': 'float', 'value': 0.3, 'step': 0.1, 'limits': (0,1)},
+    {'name': 'xratio', 'type': 'float', 'value': 0.1, 'step': 0.1, 'limits': (0,1)},
     {'name': 'ylim_max', 'type': 'float', 'value': 10.},
     {'name': 'ylim_min', 'type': 'float', 'value': -10.},
     {'name': 'scatter_size', 'type': 'float', 'value': 10.,  'limits': (0,np.inf)},
@@ -30,6 +33,8 @@ default_params = [
     {'name': 'display_labels', 'type': 'bool', 'value': False},
     {'name': 'display_offset', 'type': 'bool', 'value': False},
     {'name': 'antialias', 'type': 'bool', 'value': False},
+    {'name': 'refresh_interval', 'type': 'int', 'value': 100, 'limits':[5, 1000]},
+    {'name': 'decimate', 'type': 'int', 'value': 1, 'limits': [1, None], },
     {'name': 'decimation_method', 'type': 'list', 'value': 'min_max', 'values': ['min_max', 'mean', 'pure_decimate',  ]},
     {'name': 'line_width', 'type': 'float', 'value': 1., 'limits': (0, np.inf)},
     ]
@@ -41,6 +46,58 @@ default_by_channel_params = [
     {'name': 'visible', 'type': 'bool', 'value': True},
     ]
 
+
+class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
+    def __init__(self, stream):
+        BaseAnalogSignalSource.__init__(self)
+        #
+        self.stream = stream
+        self.signals = stream.buffer
+        self.sample_rate = float(stream.params['sample_rate'])
+        #
+        t_start = 0.
+        if 't_start' in stream.params:
+            t_start = float(stream.params['t_start'])
+        self._t_start = t_start
+        self._t_stop = self.signals.shape[0] / self.sample_rate + t_start
+        #
+        channel_names = None
+        if 'channel_info' in stream.params:
+            channel_names = []
+            for chan_idx, chan_info in enumerate(stream.params['channel_info']):
+                if 'name' in chan_info:
+                    channel_names.append(chan_info['name'])
+                else:
+                    channel_names.append('{}_{}'.format(stream.name, chan_idx))
+        self.channel_names = channel_names
+        return
+
+    @property
+    def nb_channel(self):
+        return self.signals.shape[1]
+
+    def get_channel_name(self, chan=0):
+        return self.channel_names[chan]
+
+    @property
+    def t_start(self):
+        return self._t_start
+
+    @property
+    def t_stop(self):
+        return self._t_stop
+
+    def get_length(self):
+        return self.signals.shape[0]
+
+    def get_chunk(self, i_start=None, i_stop=None):
+        return self.signals.get_data(i_start, i_stop, copy=False, join=True)
+    
+    def time_to_index(self, t):
+        return int(t * self.sample_rate)
+
+    def index_to_time(self, ind):
+        return float(ind / self.sample_rate)
 
 class TraceViewer_ParamController(Base_MultiChannel_ParamController):
 
@@ -121,8 +178,6 @@ class TraceViewer_ParamController(Base_MultiChannel_ParamController):
         #                 = chunk * (raw_gains * gains) + (raw_offsets * gains + offsets)
         #                 = chunk * total_gains + total_offsets
         return (self.raw_offsets * self.gains) + self.offsets
-
-
 
     def estimate_median_mad(self):
         # Estimates are performed on real values for both raw and in-memory
@@ -240,119 +295,6 @@ class TraceViewer_ParamController(Base_MultiChannel_ParamController):
         self.viewer.by_channel_params['ch{}'.format(chan_index), 'offset'] = label_y - self.signals_med[chan_index]*self.gains[chan_index]
 
 
-class DataGrabber(QT.QObject):
-    data_ready = QT.pyqtSignal(float, float, float, object, object, object, object, object)
-
-    def __init__(self, source, viewer, parent=None):
-        QT.QObject.__init__(self, parent)
-        self.source = source
-        self.viewer = viewer
-        self._max_point = 3000
-
-    def get_data(
-            self, t, t_start, t_stop, total_gains, total_offsets, visibles, decimation_method):
-
-        i_start, i_stop = self.source.time_to_index(t_start), self.source.time_to_index(t_stop) + 2
-        #~ print(t_start, t_stop, i_start, i_stop)
-
-        ds_ratio = (i_stop - i_start)//self._max_point + 1
-        #~ print()
-        #~ print('ds_ratio', ds_ratio, 'i_start i_stop', i_start, i_stop  )
-
-        if ds_ratio>1:
-            i_start = i_start - (i_start%ds_ratio)
-            i_stop = i_stop - (i_stop%ds_ratio)
-            #~ print('i_start, i_stop', i_start, i_stop)
-
-        #clip it
-        i_start = max(0, i_start)
-        i_start = min(i_start, self.source.get_length())
-        i_stop = max(0, i_stop)
-        i_stop = min(i_stop, self.source.get_length())
-        #
-        if ds_ratio>1:
-            #after clip
-            i_start = i_start - (i_start%ds_ratio)
-            i_stop = i_stop - (i_stop%ds_ratio)
-
-        #~ print('final i_start i_stop', i_start, i_stop  )
-
-        sigs_chunk = self.source.get_chunk(i_start=i_start, i_stop=i_stop)
-
-        #~ print('sigs_chunk.shape', sigs_chunk.shape)
-        data_curves = sigs_chunk[:, visibles].T.copy()
-        if data_curves.dtype!='float32':
-            data_curves = data_curves.astype('float32')
-
-        if ds_ratio>1:
-            small_size = (data_curves.shape[1]//ds_ratio)
-            if decimation_method == 'min_max':
-                small_size *= 2
-
-            small_arr = np.empty((data_curves.shape[0], small_size), dtype=data_curves.dtype)
-
-            if decimation_method == 'min_max' and data_curves.size>0:
-                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
-                small_arr[:, ::2] = full_arr.max(axis=2)
-                small_arr[:, 1::2] = full_arr.min(axis=2)
-            elif decimation_method == 'mean' and data_curves.size>0:
-                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
-                small_arr[:, :] = full_arr.mean(axis=2)
-            elif decimation_method == 'pure_decimate':
-                small_arr[:, :] = data_curves[:, ::ds_ratio]
-            elif data_curves.size == 0:
-                pass
-
-            data_curves = small_arr
-
-        #~ print(data_curves.shape)
-
-        data_curves *= total_gains[visibles, None]
-        data_curves += total_offsets[visibles, None]
-        dict_curves = {}
-        for i, c in enumerate(visibles):
-            dict_curves[c] = data_curves[i, :]
-
-        #~ print(ds_ratio)
-        t_start2 = self.source.index_to_time(i_start)
-        times_curves = np.arange(data_curves.shape[1], dtype='float64') # ensure high temporal precision (see issue #28)
-        times_curves /= self.source.sample_rate/ds_ratio
-        if ds_ratio>1 and decimation_method == 'min_max':
-            times_curves /=2
-        times_curves += t_start2
-
-        dict_scatter = None
-        if self.source.with_scatter:
-            pass
-            dict_scatter = {}
-            for k in self.source.get_scatter_babels():
-                x, y = [[]], [[]]
-                for i, c in enumerate(visibles):
-                    scatter_inds = self.source.get_scatter(i_start=i_start, i_stop=i_stop, chan=c, label=k)
-                    if scatter_inds is None: continue
-                    x.append((scatter_inds-i_start)/self.source.sample_rate+t_start2)
-                    y.append(sigs_chunk[scatter_inds-i_start, c]*total_gains[c]+total_offsets[c])
-
-                dict_scatter[k] = (np.concatenate(x), np.concatenate(y))
-
-        return t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter
-
-    def on_request_data(self, t, t_start, t_stop, total_gains, total_offsets, visibles, decimation_method):
-        #~ print('on_request_data', t_start, t_stop)
-
-        if self.viewer.t != t:
-            #~ print('on_request_data not same t')
-            return
-
-        t, t_start, t_stop, visibles, dict_curves, times_curves,\
-                    sigs_chunk, dict_scatter = self.get_data(t, t_start, t_stop, total_gains, total_offsets, visibles, decimation_method)
-
-
-        #~ print('on_request_data', threading.get_ident())
-        #~ time.sleep(1.)
-        self.data_ready.emit(t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter)
-
-
 class TraceLabelItem(pg.TextItem):
 
     label_dragged = QT.pyqtSignal(float)
@@ -387,77 +329,41 @@ class TraceLabelItem(pg.TextItem):
     def wheelEvent(self, ev):
         '''Emit a yzoom factor for the associated trace'''
         if ev.modifiers() == QT.Qt.ControlModifier:
-            z = 5. if ev.delta()>0 else 1/5.
+            z = 5. if ev.delta() > 0 else 1/5.
         else:
-            z = 1.1 if ev.delta()>0 else 1/1.1
+            z = 1.1 if ev.delta() > 0 else 1/1.1
         self.label_ygain_zoom.emit(z)
         ev.accept()
 
 
-class TraceViewer(BaseMultiChannelViewer):
+class TraceViewer(BaseMultiChannelViewer, WidgetNode):
+    #
+    _input_specs = {'signals': dict(streamtype='signals')}
+    #
     _default_params = default_params
     _default_by_channel_params = default_by_channel_params
 
     _ControllerClass = TraceViewer_ParamController
 
-    request_data = QT.pyqtSignal(float, float, float, object, object, object, object)
+    # request_data = QT.pyqtSignal(float, float, float, object, object, object, object)
 
-    def __init__(self, useOpenGL=None, **kargs):
-        BaseMultiChannelViewer.__init__(self, **kargs)
-
-        self.make_params()
-
-        # useOpenGL=True eliminates the extremely poor performance associated
-        # with TraceViewer's line_width > 1.0, but it also degrades overall
-        # performance somewhat and is reportedly unstable
-        self.set_layout(useOpenGL=useOpenGL)
-
-        self.make_param_controller()
-
-        self.viewBox.doubleclicked.connect(self.show_params_controller)
-
-        self.initialize_plot()
-
+    def __init__(self, useOpenGL=None, source=None, **kargs):
+        BaseMultiChannelViewer.__init__(self, source=source, **kargs)
+        WidgetNode.__init__(self, **kargs)
+        #
+        self.useOpenGL = useOpenGL
         self.last_sigs_chunk = None
+        self._max_point = 3000
+        self.last_t_min = None
 
-        self.thread = QT.QThread(parent=self)
-        self.datagrabber = DataGrabber(source=self.source, viewer=self)
-        self.datagrabber.moveToThread(self.thread)
-        self.thread.start()
-
-
-        self.datagrabber.data_ready.connect(self.on_data_ready)
-        self.request_data.connect(self.datagrabber.on_request_data)
-
-        self.params.param('xsize').setLimits((0, np.inf))
-
-    @classmethod
-    def from_numpy(cls, sigs, sample_rate, t_start, name, channel_names=None,
-                scatter_indexes=None, scatter_channels=None, scatter_colors=None):
-
-        if scatter_indexes is None:
-            source = InMemoryAnalogSignalSource(sigs, sample_rate, t_start, channel_names=channel_names)
-        else:
-            source = AnalogSignalSourceWithScatter(
-                sigs, sample_rate, t_start, channel_names=channel_names,
-                scatter_indexes=scatter_indexes, scatter_channels=scatter_channels, scatter_colors=scatter_colors)
-        view = cls(source=source, name=name)
-
-        return view
-
-    @classmethod
-    def from_neo_analogsignal(cls, neo_anasig, name):
-        source = NeoAnalogSignalSource(neo_anasig)
-        view = cls(source=source, name=name)
-        return view
+    def seek(self, t):
+        self.t = t
 
     def closeEvent(self, event):
         event.accept()
-        self.thread.quit()
-        self.thread.wait()
+        self.close()
 
     def initialize_plot(self):
-
         self.vline = pg.InfiniteLine(angle = 90, movable = False, pen = self.params['vline_color'])
         self.vline.setZValue(1) # ensure vline is above plot elements
         self.plot.addItem(self.vline)
@@ -509,6 +415,8 @@ class TraceViewer(BaseMultiChannelViewer):
             if param.name()=='scatter_size':
                 if self.source.with_scatter:
                     self.scatter.setSize(self.params['scatter_size'])
+            if param.name()=='refresh_interval':
+                self.timer.setInterval(self.params['refresh_interval'])
             if param.name()=='vline_color':
                 self.vline.setPen(self.params['vline_color'])
             if param.name()=='label_fill_color':
@@ -520,35 +428,85 @@ class TraceViewer(BaseMultiChannelViewer):
                     font.setPointSize(self.params['label_size'])
                     label.setFont(font)
 
-
-        self.refresh()
-
     def auto_scale(self):
         #~ print('auto_scale', self.last_sigs_chunk)
         if self.last_sigs_chunk is None:
             xsize = self.params['xsize']
             xratio = self.params['xratio']
-            t_start, t_stop = self.t-xsize*xratio , self.t+xsize*(1-xratio)
+            decimation_method = self.params['decimation_method']
+            #
+            t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
+            #
             visibles, = np.nonzero(self.params_controller.visible_channels)
             total_gains = self.params_controller.total_gains
             total_offsets = self.params_controller.total_offsets
-            _, _, _, _, _, _,sigs_chunk, _ = self.datagrabber.get_data(self.t, t_start, t_stop, total_gains,
-                                            total_offsets, visibles, self.params['decimation_method'])
+            _, _, _, _, _, _,sigs_chunk, _ = self.get_data(
+                self.t, t_start, t_stop, total_gains,
+                total_offsets, visibles, decimation_method)
             self.last_sigs_chunk = sigs_chunk
 
         self.params_controller.compute_rescale()
-        self.refresh()
-
-    def refresh(self):
+    
+    def _refresh(self):
         #~ print('TraceViewer.refresh', 't', self.t)
         xsize = self.params['xsize']
         xratio = self.params['xratio']
-        t_start, t_stop = self.t-xsize*xratio , self.t+xsize*(1-xratio)
+        decimation_method = self.params['decimation_method']
+        #
+        t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
+        #
         visibles, = np.nonzero(self.params_controller.visible_channels)
         total_gains = self.params_controller.total_gains
         total_offsets = self.params_controller.total_offsets
+        #
+        (
+            self.t, t_start, t_stop,
+            visibles, dict_curves, times_curves,
+            sigs_chunk, dict_scatter) = (
+                self.get_data(
+                    self.t, t_start, t_stop,
+                    total_gains, total_offsets, visibles, decimation_method)
+            )
+        self.on_data_ready(
+            self.t, t_start, t_stop, visibles,
+            dict_curves, times_curves, sigs_chunk, dict_scatter)
+        #
+        # self.request_data.emit(
+        #     self.t, t_start, t_stop,
+        #     total_gains, total_offsets, visibles, self.params['decimation_method'])
 
-        self.request_data.emit(self.t, t_start, t_stop, total_gains, total_offsets, visibles, self.params['decimation_method'])
+    def _on_new_data(self, pos, data):
+        xsize = self.params['xsize']
+        xratio = self.params['xratio']
+        t_min = self.source.index_to_time(self.source.signals.first_index())
+        t_max = self.source.index_to_time(self.source.signals.index())
+        # print('t_min {:.1f}, self.t {:.1f}, t_max {:.1f}'.format(t_min, self.t, t_max))
+        #
+        if self.parentViewer is not None:   
+            self.parentViewer.navigation_toolbar.set_start_stop(
+                t_min, t_max, seek=False) 
+            if self.parentViewer.navigation_toolbar.play_pause_status:
+                # if self.last_t_min is not None:
+                #     changeInT = t_min - self.last_t_min
+                #     self.t = self.t + changeInT
+                #
+                # self.t = t_max - xsize*(1-xratio)
+                self.parentViewer.navigation_toolbar.seek(t_max - xsize*(1-xratio))
+                self.last_t_min = t_min
+                # print('play_pause_status: self.t = {:.2f}'.format(self.t))
+        else:
+            if self.t < t_min + xsize*xratio:
+                # print('\t Setting self.t = {}'.format( + xsize*xratio))
+                # self.t =  + xsize*xratio
+                #      # 
+                self.parentViewer.navigation_toolbar.seek(t_min + xsize*xratio)
+            if self.t > t_max - xsize*(1-xratio):
+                # print('\t Setting self.t = {}'.format(t_max - xsize*(1-xratio)))
+                # self.t = t_max - xsize*(1-xratio)
+                # 
+                self.parentViewer.navigation_toolbar.seek(t_max - xsize*(1-xratio))
+        # self._head = pos
+        pass
 
     def on_data_ready(
             self, t, t_start, t_stop, visibles,
@@ -622,4 +580,235 @@ class TraceViewer(BaseMultiChannelViewer):
         self.plot.setYRange(self.params['ylim_min'], self.params['ylim_max'], padding = 0.0)
         #~ self.graphicsview.repaint()
         return
+
+    def get_data(
+            self, t, t_start, t_stop,
+            total_gains, total_offsets, visibles, decimation_method):
+        #
+        i_start, i_stop = self.source.time_to_index(t_start), self.source.time_to_index(t_stop) + 2
+        # print(t_start, t_stop, i_start, i_stop)
+        ds_ratio = (i_stop - i_start)//self._max_point + 1
+        #~ print()
+        #~ print('ds_ratio', ds_ratio, 'i_start i_stop', i_start, i_stop  )
+
+        if ds_ratio>1:
+            i_start = i_start - (i_start%ds_ratio)
+            i_stop = i_stop - (i_stop%ds_ratio)
+            #~ print('i_start, i_stop', i_start, i_stop)
+
+        #clip it 
+        ##  i_start = max(0, i_start)
+        ##  i_start = min(i_start, self.source.get_length())
+        ##  #
+        ##  i_stop = max(0, i_stop)
+        ##  i_stop = min(i_stop, self.source.get_length())
+        # 
+        index_padding = 10
+        i_start = max(self.source.signals.first_index() + index_padding, i_start)
+        i_start = min(i_start, self.source.signals.index() - index_padding)
+        #
+        i_stop = max(self.source.signals.first_index() + index_padding, i_stop)
+        i_stop = min(i_stop, self.source.signals.index() - index_padding)
+        # print(t_start, t_stop, i_start, i_stop)
+        #
+        if ds_ratio>1:
+            #after clip
+            i_start = i_start - (i_start%ds_ratio)
+            i_stop = i_stop - (i_stop%ds_ratio)
+
+        #~ print('final i_start i_stop', i_start, i_stop  )
+
+        sigs_chunk = self.source.get_chunk(i_start=i_start, i_stop=i_stop)
+
+        #~ print('sigs_chunk.shape', sigs_chunk.shape)
+        data_curves = sigs_chunk[:, visibles].T.copy()
+        if data_curves.dtype!='float32':
+            data_curves = data_curves.astype('float32')
+
+        if ds_ratio>1:
+            small_size = (data_curves.shape[1]//ds_ratio)
+            if decimation_method == 'min_max':
+                small_size *= 2
+
+            small_arr = np.empty((data_curves.shape[0], small_size), dtype=data_curves.dtype)
+
+            if decimation_method == 'min_max' and data_curves.size>0:
+                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
+                small_arr[:, ::2] = full_arr.max(axis=2)
+                small_arr[:, 1::2] = full_arr.min(axis=2)
+            elif decimation_method == 'mean' and data_curves.size>0:
+                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
+                small_arr[:, :] = full_arr.mean(axis=2)
+            elif decimation_method == 'pure_decimate':
+                small_arr[:, :] = data_curves[:, ::ds_ratio]
+            elif data_curves.size == 0:
+                pass
+
+            data_curves = small_arr
+
+        #~ print(data_curves.shape)
+
+        data_curves *= total_gains[visibles, None]
+        data_curves += total_offsets[visibles, None]
+        dict_curves = {}
+        for i, c in enumerate(visibles):
+            dict_curves[c] = data_curves[i, :]
+
+        #~ print(ds_ratio)
+        t_start2 = self.source.index_to_time(i_start)
+        times_curves = np.arange(data_curves.shape[1], dtype='float64') # ensure high temporal precision (see issue #28)
+        times_curves /= self.source.sample_rate/ds_ratio
+        if ds_ratio>1 and decimation_method == 'min_max':
+            times_curves /=2
+        times_curves += t_start2
+
+        dict_scatter = None
+        if self.source.with_scatter:
+            pass
+            dict_scatter = {}
+            for k in self.source.get_scatter_babels():
+                x, y = [[]], [[]]
+                for i, c in enumerate(visibles):
+                    scatter_inds = self.source.get_scatter(i_start=i_start, i_stop=i_stop, chan=c, label=k)
+                    if scatter_inds is None: continue
+                    x.append((scatter_inds-i_start)/self.source.sample_rate+t_start2)
+                    y.append(sigs_chunk[scatter_inds-i_start, c]*total_gains[c]+total_offsets[c])
+                dict_scatter[k] = (np.concatenate(x), np.concatenate(y))
+
+        return t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter
+
+    def _check_nb_channel(self):
+        self.nb_channel = self.inputs['signals'].params['shape'][1]
+
+    def _configure(
+            self, with_user_dialog=True, max_xsize=60.,
+            window_label='pyacq_scope0'):
+        """This method is called during `Node.configure()` and must be
+        reimplemented by subclasses.
+        """
+        #
+        self.with_user_dialog = with_user_dialog
+        self.max_xsize = max_xsize
+        #
+        self.window_label = window_label
+        self.setWindowTitle(self.window_label)
+
+    def _initialize(self, **kargs):
+        """This method is called during `Node.initialize()` and must be
+        reimplemented by subclasses.
+        """
+
+        #################
+        self._check_nb_channel()
+        assert len(self.inputs['signals'].params['shape']) == 2, 'Are you joking ?'
+        
+        self.sample_rate = self.inputs['signals'].params['sample_rate']
+        buf_size = int(self.sample_rate * self.max_xsize)
+        self.inputs['signals'].set_buffer(size=buf_size, axisorder=[1,0], double=True)
+        self.source = InputStreamAnalogSignalSource(self.inputs['signals'])
+        
+        self.make_params()
+
+        # useOpenGL=True eliminates the extremely poor performance associated
+        # with TraceViewer's line_width > 1.0, but it also degrades overall
+        # performance somewhat and is reportedly unstable
+        self.set_layout(useOpenGL=self.useOpenGL)
+
+        self.make_param_controller()
+
+        self.viewBox.doubleclicked.connect(self.show_params_controller)
+
+        self.initialize_plot()
+        
+        self.params.param('xsize').setLimits((0, np.inf))
+
+        # traceviewer threads
+        # self.thread = QT.QThread(parent=self)
+        # self.datagrabber = DataGrabber(source=self.source, viewer=self)
+        # self.datagrabber.moveToThread(self.thread)
+        # self.thread.start()
+
+        # self.datagrabber.data_ready.connect(self.on_data_ready)
+        # self.request_data.connect(self.datagrabber.on_request_data)
+        # pdb.set_trace()
+        # poller
+        self.poller = ThreadPollInput(
+            input_stream=self.inputs['signals'], return_data=None)
+        self.poller.new_data.connect(self._on_new_data)
+        # timer
+        # self._head = 0
+        self.timer = QT.QTimer(singleShot=False, interval=100)
+        self.timer.timeout.connect(self.refresh)
+
+    def _start(self):
+        # self._head = 0
+        self.estimate_decimate()
+        self.reset_curves_data()
+        self.poller.start()
+        self.timer.start()
+    
+    def _stop(self):
+        self.poller.stop()
+        self.poller.wait()
+        self.timer.stop()
+    
+    def _close(self):
+        if self.running():
+            self.stop()
+        if self.with_user_dialog:
+            self.params_controller.close()
+    
+    def refresh(self):
+        self._refresh()
+    
+    def reset_curves_data(self):
+        xsize = self.params['xsize']
+        decimate = self.params['decimate']
+        #~ sr = self.input.params['sample_rate']
+        self.full_size = int(xsize*self.sample_rate)
+        self.small_size = self.full_size//decimate
+        if self.small_size%2!=0:  # ensure for min_max decimate
+            self.small_size -=1
+        self.full_size = self.small_size*decimate
+        self.t_vect = np.arange(0,self.small_size, dtype=float)/(self.sample_rate/decimate)
+        self.t_vect -= self.t_vect[-1]
+        # self.curves = [np.zeros((self.small_size), dtype=float) for i in range(self.nb_channel)]
+
+    def estimate_decimate(self, nb_point=4000):
+        xsize = self.params['xsize']
+        self.params['decimate'] = max(int(xsize*self.sample_rate)//nb_point, 1)
+    
+    def check_input_specs(self):
+        """This method is called during `Node.initialize()` and may be
+        reimplemented by subclasses to ensure that inputs are correctly
+        configured before the node is started.
+        
+        In case of misconfiguration, this method must raise an exception.
+        """
+        pass
+    
+    def check_output_specs(self):
+        """This method is called during `Node.initialize()` and may be
+        reimplemented by subclasses to ensure that outputs are correctly
+        configured before the node is started.
+        
+        In case of misconfiguration, this method must raise an exception.
+        """
+        pass
+    
+    def after_input_connect(self, inputname):
+        """This method is called when one of the Node's inputs has been
+        connected.
+        """
+        pass
+    
+    def after_output_configure(self, outputname):
+        """This method is called when one of the Node's outputs has been
+        configured.
+        
+        It may be reimplemented by subclasses.
+        """
+        pass
+    
+register_node_type(TraceViewer)
 
