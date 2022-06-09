@@ -41,6 +41,7 @@ class MyViewBox(pg.ViewBox):
         ev.accept()
         self.xsize_zoom.emit((ev.pos()-ev.lastPos()).x())
 
+
 class BaseOscilloscope(WidgetNode):
     """
     Base Class for QOscilloscope and QOscilloscopeDigital
@@ -467,8 +468,6 @@ class QOscilloscope(BaseOscilloscope):
         
         full_arr = full_arr.astype(float)
 
-
-        
         if decimate>1:
             if self.params['decimation_method'] == 'pure_decimate':
                 small_arr = full_arr[:, ::decimate].copy()
@@ -488,9 +487,6 @@ class QOscilloscope(BaseOscilloscope):
         # gain/offset
         small_arr[visibles, :] *= gains[visibles, None]
         small_arr[visibles, :] += offsets[visibles, None]
-        
-        
-        
         
         if mode=='scroll':
             for c, visible in enumerate(visibles):
