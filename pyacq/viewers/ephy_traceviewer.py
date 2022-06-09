@@ -14,9 +14,6 @@ from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamContr
 from ephyviewer.datasource import InMemoryAnalogSignalSource, AnalogSignalSourceWithScatter, NeoAnalogSignalSource, AnalogSignalFromNeoRawIOSource
 from ephyviewer.tools import mkCachedBrush
 
-
-
-
 default_params = [
     {'name': 'xsize', 'type': 'float', 'value': 3., 'step': 0.1},
     {'name': 'xratio', 'type': 'float', 'value': 0.3, 'step': 0.1, 'limits': (0,1)},
@@ -43,6 +40,7 @@ default_by_channel_params = [
     {'name': 'offset', 'type': 'float', 'value': 0., 'step': 0.1},
     {'name': 'visible', 'type': 'bool', 'value': True},
     ]
+
 
 class TraceViewer_ParamController(Base_MultiChannel_ParamController):
 
@@ -242,8 +240,6 @@ class TraceViewer_ParamController(Base_MultiChannel_ParamController):
         self.viewer.by_channel_params['ch{}'.format(chan_index), 'offset'] = label_y - self.signals_med[chan_index]*self.gains[chan_index]
 
 
-
-
 class DataGrabber(QT.QObject):
     data_ready = QT.pyqtSignal(float, float, float, object, object, object, object, object)
 
@@ -253,7 +249,8 @@ class DataGrabber(QT.QObject):
         self.viewer = viewer
         self._max_point = 3000
 
-    def get_data(self, t, t_start, t_stop, total_gains, total_offsets, visibles, decimation_method):
+    def get_data(
+            self, t, t_start, t_stop, total_gains, total_offsets, visibles, decimation_method):
 
         i_start, i_stop = self.source.time_to_index(t_start), self.source.time_to_index(t_stop) + 2
         #~ print(t_start, t_stop, i_start, i_stop)
@@ -272,6 +269,7 @@ class DataGrabber(QT.QObject):
         i_start = min(i_start, self.source.get_length())
         i_stop = max(0, i_stop)
         i_stop = min(i_stop, self.source.get_length())
+        #
         if ds_ratio>1:
             #after clip
             i_start = i_start - (i_start%ds_ratio)
@@ -281,16 +279,12 @@ class DataGrabber(QT.QObject):
 
         sigs_chunk = self.source.get_chunk(i_start=i_start, i_stop=i_stop)
 
-
-
         #~ print('sigs_chunk.shape', sigs_chunk.shape)
         data_curves = sigs_chunk[:, visibles].T.copy()
         if data_curves.dtype!='float32':
             data_curves = data_curves.astype('float32')
 
         if ds_ratio>1:
-
-
             small_size = (data_curves.shape[1]//ds_ratio)
             if decimation_method == 'min_max':
                 small_size *= 2
@@ -309,14 +303,13 @@ class DataGrabber(QT.QObject):
             elif data_curves.size == 0:
                 pass
 
-
             data_curves = small_arr
 
         #~ print(data_curves.shape)
 
         data_curves *= total_gains[visibles, None]
         data_curves += total_offsets[visibles, None]
-        dict_curves ={}
+        dict_curves = {}
         for i, c in enumerate(visibles):
             dict_curves[c] = data_curves[i, :]
 
@@ -358,7 +351,6 @@ class DataGrabber(QT.QObject):
         #~ print('on_request_data', threading.get_ident())
         #~ time.sleep(1.)
         self.data_ready.emit(t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter)
-
 
 
 class TraceLabelItem(pg.TextItem):
@@ -438,7 +430,6 @@ class TraceViewer(BaseMultiChannelViewer):
         self.request_data.connect(self.datagrabber.on_request_data)
 
         self.params.param('xsize').setLimits((0, np.inf))
-
 
     @classmethod
     def from_numpy(cls, sigs, sample_rate, t_start, name, channel_names=None,
@@ -559,8 +550,9 @@ class TraceViewer(BaseMultiChannelViewer):
 
         self.request_data.emit(self.t, t_start, t_stop, total_gains, total_offsets, visibles, self.params['decimation_method'])
 
-
-    def on_data_ready(self, t,   t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter):
+    def on_data_ready(
+            self, t, t_start, t_stop, visibles,
+            dict_curves, times_curves, sigs_chunk, dict_scatter):
         #~ print('on_data_ready', t, t_start, t_stop)
 
         if self.t != t:
@@ -576,7 +568,6 @@ class TraceViewer(BaseMultiChannelViewer):
         if not hasattr(self.params_controller, 'signals_med'):
             self.params_controller.estimate_median_mad()
         signals_med = self.params_controller.signals_med
-
 
         for i, c in enumerate(visibles):
             self.curves[c].show()
@@ -629,5 +620,6 @@ class TraceViewer(BaseMultiChannelViewer):
         self.vline.setPos(self.t)
         self.plot.setXRange( t_start, t_stop, padding = 0.0)
         self.plot.setYRange(self.params['ylim_min'], self.params['ylim_max'], padding = 0.0)
-
         #~ self.graphicsview.repaint()
+        return
+

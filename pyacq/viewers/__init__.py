@@ -8,3 +8,4 @@ from .qtimefreq import TimeFreqWorker, QTimeFreq
 from .qtriggeredoscilloscope import QTriggeredOscilloscope
 from .qdigitaloscilloscope import QDigitalOscilloscope
 from .qoscilloscopemultiplot import QOscilloscopeMultiPlot
+from .ephy_traceviewer import TraceViewer
