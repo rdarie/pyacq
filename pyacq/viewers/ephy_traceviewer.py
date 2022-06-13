@@ -19,7 +19,7 @@ from ..core import (WidgetNode, register_node_type, InputStream,
 
 default_params = [
     {'name': 'xsize', 'type': 'float', 'value': 3., 'step': 0.1},
-    {'name': 'xratio', 'type': 'float', 'value': 0.1, 'step': 0.1, 'limits': (0,1)},
+    {'name': 'xratio', 'type': 'float', 'value': 0.3, 'step': 0.1, 'limits': (0,1)},
     {'name': 'ylim_max', 'type': 'float', 'value': 10.},
     {'name': 'ylim_min', 'type': 'float', 'value': -10.},
     {'name': 'scatter_size', 'type': 'float', 'value': 10.,  'limits': (0,np.inf)},
