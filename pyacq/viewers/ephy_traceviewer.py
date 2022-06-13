@@ -14,7 +14,7 @@ from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamContr
 from ephyviewer.datasource import InMemoryAnalogSignalSource, AnalogSignalSourceWithScatter, NeoAnalogSignalSource, AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource
 from ephyviewer.tools import mkCachedBrush
 
-from ..core import (WidgetNode, register_node_type, InputStream,
+from ..core import (Node, WidgetNode, register_node_type, InputStream,
         ThreadPollInput, StreamConverter)
 
 default_params = [
@@ -90,14 +90,23 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
     def get_length(self):
         return self.signals.shape[0]
 
+
+    def get_first_index(self):
+        return self.signals.first_index()
+
+    def get_last_index(self):
+        return self.signals.index()
+
     def get_chunk(self, i_start=None, i_stop=None):
         return self.signals.get_data(i_start, i_stop, copy=False, join=True)
     
     def time_to_index(self, t):
-        return int(t * self.sample_rate)
+        ind = int(t * self.sample_rate)
+        return ind
 
     def index_to_time(self, ind):
         return float(ind / self.sample_rate)
+
 
 class TraceViewer_ParamController(Base_MultiChannel_ParamController):
 
@@ -336,7 +345,7 @@ class TraceLabelItem(pg.TextItem):
         ev.accept()
 
 
-class TraceViewer(BaseMultiChannelViewer, WidgetNode):
+class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
     #
     _input_specs = {'signals': dict(streamtype='signals')}
     #
@@ -347,10 +356,14 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
 
     # request_data = QT.pyqtSignal(float, float, float, object, object, object, object)
 
-    def __init__(self, useOpenGL=None, source=None, **kargs):
+    def __init__(
+            self, controlsParentViewer=True,
+            useOpenGL=None, source=None,
+            **kargs):
         BaseMultiChannelViewer.__init__(self, source=source, **kargs)
         WidgetNode.__init__(self, **kargs)
         #
+        self.controlsParentViewer = controlsParentViewer
         self.useOpenGL = useOpenGL
         self.last_sigs_chunk = None
         self._max_point = 3000
@@ -358,10 +371,6 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
 
     def seek(self, t):
         self.t = t
-
-    def closeEvent(self, event):
-        event.accept()
-        self.close()
 
     def initialize_plot(self):
         self.vline = pg.InfiniteLine(angle = 90, movable = False, pen = self.params['vline_color'])
@@ -452,7 +461,29 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
         xsize = self.params['xsize']
         xratio = self.params['xratio']
         decimation_method = self.params['decimation_method']
+        ## adjust mainviewer bounds
+        t_min = self.source.index_to_time(self.source.signals.first_index())
+        t_max = self.source.index_to_time(self.source.signals.index())
+        # print('t_min {:.1f}, self.t {:.1f}, t_max {:.1f}'.format(t_min, self.t, t_max))
         #
+        if (self.parentViewer is not None) and self.controlsParentViewer:
+            nav_t_start = min(
+                self.parentViewer.navigation_toolbar.t_start,
+                t_min)
+            nav_t_stop = max(
+                self.parentViewer.navigation_toolbar.t_stop,
+                t_max)
+            self.parentViewer.navigation_toolbar.set_start_stop(
+                nav_t_start, nav_t_stop, seek=False)
+            if self.parentViewer.navigation_toolbar.play_pause_status:
+                # if self.last_t_min is not None:
+                #     changeInT = t_min - self.last_t_min
+                #     self.t = self.t + changeInT
+                #
+                self.t = t_max - xsize*(1-xratio)
+                self.last_t_min = t_min
+                # print('play_pause_status: self.t = {:.2f}'.format(self.t))
+            self.parentViewer.navigation_toolbar.seek(self.t)
         t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
         #
         visibles, = np.nonzero(self.params_controller.visible_channels)
@@ -470,41 +501,10 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
         self.on_data_ready(
             self.t, t_start, t_stop, visibles,
             dict_curves, times_curves, sigs_chunk, dict_scatter)
-        #
-        # self.request_data.emit(
-        #     self.t, t_start, t_stop,
-        #     total_gains, total_offsets, visibles, self.params['decimation_method'])
 
     def _on_new_data(self, pos, data):
-        xsize = self.params['xsize']
-        xratio = self.params['xratio']
-        t_min = self.source.index_to_time(self.source.signals.first_index())
-        t_max = self.source.index_to_time(self.source.signals.index())
-        # print('t_min {:.1f}, self.t {:.1f}, t_max {:.1f}'.format(t_min, self.t, t_max))
-        #
-        if self.parentViewer is not None:   
-            self.parentViewer.navigation_toolbar.set_start_stop(
-                t_min, t_max, seek=False) 
-            if self.parentViewer.navigation_toolbar.play_pause_status:
-                # if self.last_t_min is not None:
-                #     changeInT = t_min - self.last_t_min
-                #     self.t = self.t + changeInT
-                #
-                # self.t = t_max - xsize*(1-xratio)
-                self.parentViewer.navigation_toolbar.seek(t_max - xsize*(1-xratio))
-                self.last_t_min = t_min
-                # print('play_pause_status: self.t = {:.2f}'.format(self.t))
-        else:
-            if self.t < t_min + xsize*xratio:
-                # print('\t Setting self.t = {}'.format( + xsize*xratio))
-                # self.t =  + xsize*xratio
-                #      # 
-                self.parentViewer.navigation_toolbar.seek(t_min + xsize*xratio)
-            if self.t > t_max - xsize*(1-xratio):
-                # print('\t Setting self.t = {}'.format(t_max - xsize*(1-xratio)))
-                # self.t = t_max - xsize*(1-xratio)
-                # 
-                self.parentViewer.navigation_toolbar.seek(t_max - xsize*(1-xratio))
+        # xsize = self.params['xsize']
+        # xratio = self.params['xratio']
         # self._head = pos
         pass
 
@@ -585,35 +585,31 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
             self, t, t_start, t_stop,
             total_gains, total_offsets, visibles, decimation_method):
         #
-        i_start, i_stop = self.source.time_to_index(t_start), self.source.time_to_index(t_stop) + 2
+        i_start, i_stop = (
+            self.source.time_to_index(t_start),
+            self.source.time_to_index(t_stop) + 2)
         # print(t_start, t_stop, i_start, i_stop)
         ds_ratio = (i_stop - i_start)//self._max_point + 1
         #~ print()
         #~ print('ds_ratio', ds_ratio, 'i_start i_stop', i_start, i_stop  )
 
         if ds_ratio>1:
-            i_start = i_start - (i_start%ds_ratio)
+            i_start = i_start + ds_ratio - (i_start%ds_ratio)
             i_stop = i_stop - (i_stop%ds_ratio)
             #~ print('i_start, i_stop', i_start, i_stop)
 
-        #clip it 
-        ##  i_start = max(0, i_start)
-        ##  i_start = min(i_start, self.source.get_length())
-        ##  #
-        ##  i_stop = max(0, i_stop)
-        ##  i_stop = min(i_stop, self.source.get_length())
-        # 
-        index_padding = 10
-        i_start = max(self.source.signals.first_index() + index_padding, i_start)
-        i_start = min(i_start, self.source.signals.index() - index_padding)
+        #clip it
+        index_padding = 0
+        i_start = max(self.source.get_first_index() + index_padding, i_start)
+        i_start = min(i_start, self.source.get_last_index() - index_padding)
         #
-        i_stop = max(self.source.signals.first_index() + index_padding, i_stop)
-        i_stop = min(i_stop, self.source.signals.index() - index_padding)
+        i_stop = max(self.source.get_first_index() + index_padding, i_stop)
+        i_stop = min(i_stop, self.source.get_last_index() - index_padding)
         # print(t_start, t_stop, i_start, i_stop)
         #
         if ds_ratio>1:
             #after clip
-            i_start = i_start - (i_start%ds_ratio)
+            i_start = i_start + ds_ratio - (i_start%ds_ratio)
             i_stop = i_stop - (i_stop%ds_ratio)
 
         #~ print('final i_start i_stop', i_start, i_stop  )
@@ -690,8 +686,6 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
         self.with_user_dialog = with_user_dialog
         self.max_xsize = max_xsize
         #
-        self.window_label = window_label
-        self.setWindowTitle(self.window_label)
 
     def _initialize(self, **kargs):
         """This method is called during `Node.initialize()` and must be
@@ -752,6 +746,12 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
         self.poller.wait()
         self.timer.stop()
     
+    def close(self):
+        if self.running():
+            self.stop()
+        Node.close(self)
+        QT.QWidget.close(self)
+
     def _close(self):
         if self.running():
             self.stop()
@@ -809,6 +809,7 @@ class TraceViewer(BaseMultiChannelViewer, WidgetNode):
         It may be reimplemented by subclasses.
         """
         pass
-    
-register_node_type(TraceViewer)
+
+
+register_node_type(TraceViewerNode)
 

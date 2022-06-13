@@ -5,6 +5,7 @@
 import pdb
 import xipppy as xp
 import numpy as np
+from scipy import signal
 import time
 from copy import copy
 
@@ -24,8 +25,7 @@ ripple_dataReaderFuns = {
     }
 
 # dummy input
-
-def dummyDataReader(
+def dummyRandom(
         npoints=None, elecs=None,
         start_timestamp=0):
     ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
@@ -35,23 +35,91 @@ def dummyDataReader(
     timestamp = start_timestamp
     return data, timestamp
 
-dummy_dataReaderFuns = {
-    signalType: dummyDataReader
-    for signalType in ripple_signal_types
-    }
+
+def randomSineGenerator(
+        centerFreq=20, sr=1000,
+        noiseStd=1., sineAmp=1.):
+    #
+    def dummyRandomSine(
+            npoints=None, elecs=None,
+            start_timestamp=0):
+        ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
+        nb_channel = len(elecs)
+        noiseWave = noiseStd * np.random.normal(size=(npoints, nb_channel))
+        #
+        t_start = start_timestamp / 3e4
+        t = t_start + np.arange(npoints) / sr
+        sineWave = sineAmp * np.sin(2 * np.pi * centerFreq * t)[:, None]
+        #
+        data = (noiseWave + sineWave).astype('float32').reshape(1, -1, order='F')
+        # print('randomSine: data.shape = {}'.format(data.shape))
+        timestamp = start_timestamp
+        return data, timestamp
+    return dummyRandomSine
+
+
+def randomChirpGenerator(
+        startFreq=10, stopFreq=40, freqPeriod=2.,
+        sr=1000, noiseStd=1., sineAmp=1.):
+    #
+    def dummyRandomChirp(
+            npoints=None, elecs=None,
+            start_timestamp=0):
+        ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
+        nb_channel = len(elecs)
+        noiseWave = noiseStd * np.random.normal(size=(npoints, nb_channel))
+        t_start = start_timestamp / 3e4
+        t = t_start + np.arange(npoints) / sr
+        t_adj = (1. + signal.sawtooth(2 * np.pi * t / freqPeriod)) * freqPeriod / 2
+        # pdb.set_trace()
+        sineWave = sineAmp * np.asarray(signal.chirp(t_adj, startFreq, freqPeriod, stopFreq))[:, None]
+        data = (noiseWave + sineWave).astype('float32').reshape(1, -1, order='F')
+        # print('RandomChirp: data.shape = {}'.format(data.shape))
+        timestamp = start_timestamp
+        return data, timestamp
+    return dummyRandomChirp
+
 
 class DummyXipppy():
-    def __init__(self):
-        pass
+    def __init__(
+            self,
+            raw_fun=None, hires_fun=None, hifreq_fun=None, lfp_fun=None):
+        if raw_fun is None:
+            self.raw_fun = dummyRandom
+        else:
+            self.raw_fun = raw_fun
+
+        if hires_fun is None:
+            self.hires_fun = dummyRandom
+        else:
+            self.hires_fun = hires_fun
+
+        if hifreq_fun is None:
+            self.hifreq_fun = dummyRandom
+        else:
+            self.hifreq_fun = hifreq_fun
+
+        if lfp_fun is None:
+            self.lfp_fun = dummyRandom
+        else:
+            self.lfp_fun = lfp_fun
+        #
+        self.signal_type_lookup = {
+            'raw': [],
+            'hi-res': [eNum for eNum in range(1, 65)],
+            'hifreq': [eNum for eNum in range(1, 65)],
+            'lfp': [],
+            }
+
 
     def xipppy_open(self, use_tcp=True):
         return nullcontext()
 
     def signal(self, chanNum, signalType):
-        return True
+        return chanNum in self.signal_type_lookup[signalType]
 
     def list_elec(self, feType):
-        return range(1, 65)
+        return [eNum for eNum in range(1, 65)]
 
     def _close(self):
         return
@@ -59,6 +127,18 @@ class DummyXipppy():
     def time(self):
         t = int((time.time() - 1655100000.) * 3e4)
         return t
+
+    def cont_raw(self, npoints, elecs, start_timestamp):
+        return self.raw_fun(npoints, elecs, start_timestamp)
+
+    def cont_hires(self, npoints, elecs, start_timestamp):
+        return self.hires_fun(npoints, elecs, start_timestamp)
+        
+    def cont_hifreq(self, npoints, elecs, start_timestamp):
+        return self.hifreq_fun(npoints, elecs, start_timestamp)
+        
+    def cont_lfp(self, npoints, elecs, start_timestamp):
+        return self.lfp_fun(npoints, elecs, start_timestamp)
 
 class XipppyBuffer(Node):
     """
@@ -68,25 +148,30 @@ class XipppyBuffer(Node):
     _output_specs = {
         'raw': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(3e4),},
+            'sample_rate': int(30e3), 'compression': ''},
         'hi-res': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(2000),},
+            'sample_rate': int(2e3), 'compression': ''},
         'hifreq': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(7500),},
+            'sample_rate': int(15e3), 'compression': ''},
         'lfp': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(1000),},
+            'sample_rate': int(1e3), 'compression': ''},
         }
     
 
-    def __init__(self, dummy=False, **kargs):
+    def __init__(self, dummy=False, dummy_kwargs=dict(), **kargs):
         Node.__init__(self, **kargs)
         self.dummy = dummy
         if self.dummy:
-            self.dataReaderFuns = dummy_dataReaderFuns
-            self.xp = DummyXipppy()
+            self.xp = DummyXipppy(**dummy_kwargs)
+            self.dataReaderFuns = {
+                'raw': self.xp.cont_raw,
+                'hi-res': self.xp.cont_hires,
+                'hifreq': self.xp.cont_hifreq,
+                'lfp': self.xp.cont_lfp,
+                }
         else:
             self.dataReaderFuns = ripple_dataReaderFuns
             self.xp = xp
@@ -220,6 +305,7 @@ class XipppyThread(QtCore.QThread):
                 with self.lock:
                     if not self.running:
                         break
+                t_start_loop = time.perf_counter()
                 # get current nip time
                 self.head = self.node.xp.time()
                 time.sleep(self.node.latency_padding_sec)
@@ -277,7 +363,8 @@ class XipppyThread(QtCore.QThread):
                 if self.node.debugging:
                     if self.num_requests > 3:
                         self.running = False
-                time.sleep(self.node.sample_interval_sec - self.node.latency_padding_sec)
+                t_sleep = max(0., self.node.sample_interval_sec - time.perf_counter() + t_start_loop)
+                time.sleep(t_sleep)
 
     def stop(self):
         with self.lock:

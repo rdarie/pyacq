@@ -283,7 +283,7 @@ class WidgetNode(QtGui.QWidget, Node):
         Node.close(self)
         QtGui.QWidget.close(self)
 
-    def closeEvent(self,event):
+    def closeEvent(self, event):
         if self._close_node_on_widget_closed:
             if self.running():
                 self.stop()
