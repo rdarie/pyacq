@@ -47,7 +47,4 @@ class NoiseGenerator(Node):
             np.random.normal(size=(self.chunksize, self.nb_channel)).astype('float32'),
             index=self.head)
 
-# Not necessary for this example, but registering the node class would make it
-# easier for us to instantiate this type of node in a remote process via
-# Manager.create_node()
 register_node_type(NoiseGenerator)

@@ -11,10 +11,11 @@ from copy import copy
 from ..core import Node, register_node_type
 from pyqtgraph.Qt import QtCore # , QtGui
 from pyqtgraph.util.mutex import Mutex
-
+from contextlib import nullcontext
 
 ripple_signal_types = ['raw', 'hi-res', 'hifreq', 'lfp']
 ripple_fe_types = ['macro'] # TODO: iterate front end types
+
 ripple_dataReaderFuns = {
     'raw': xp.cont_raw,
     'hi-res': xp.cont_hires,
@@ -22,21 +23,73 @@ ripple_dataReaderFuns = {
     'lfp': xp.cont_lfp,
     }
 
+# dummy input
+
+def dummyDataReader(
+        npoints=None, elecs=None,
+        start_timestamp=0):
+    ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
+    nb_channel = len(elecs)
+    data = np.random.normal(
+        size=(1, npoints * nb_channel)).astype('float32')
+    timestamp = start_timestamp
+    return data, timestamp
+
+dummy_dataReaderFuns = {
+    signalType: dummyDataReader
+    for signalType in ripple_signal_types
+    }
+
+class DummyXipppy():
+    def __init__(self):
+        pass
+
+    def xipppy_open(self, use_tcp=True):
+        return nullcontext()
+
+    def signal(self, chanNum, signalType):
+        return True
+
+    def list_elec(self, feType):
+        return range(1, 65)
+
+    def _close(self):
+        return
+
+    def time(self):
+        t = int((time.time() - 1655100000.) * 3e4)
+        return t
+
 class XipppyBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
 
     _output_specs = {
-        'raw': {'streamtype': 'analogsignal', 'dtype': 'float32', 'sample_rate': int(3e4),},
-        'hi-res': {'streamtype': 'analogsignal', 'dtype': 'float32', 'sample_rate': int(2000),},
-        'hifreq': {'streamtype': 'analogsignal', 'dtype': 'float32', 'sample_rate': int(7500),},
-        'lfp': {'streamtype': 'analogsignal', 'dtype': 'float32', 'sample_rate': int(1000),},
+        'raw': {
+            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'sample_rate': int(3e4),},
+        'hi-res': {
+            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'sample_rate': int(2000),},
+        'hifreq': {
+            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'sample_rate': int(7500),},
+        'lfp': {
+            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'sample_rate': int(1000),},
         }
     
 
-    def __init__(self, **kargs):
+    def __init__(self, dummy=False, **kargs):
         Node.__init__(self, **kargs)
+        self.dummy = dummy
+        if self.dummy:
+            self.dataReaderFuns = dummy_dataReaderFuns
+            self.xp = DummyXipppy()
+        else:
+            self.dataReaderFuns = ripple_dataReaderFuns
+            self.xp = xp
         #
         self.verbose = False
         #
@@ -69,9 +122,9 @@ class XipppyBuffer(Node):
         if self.verbose:
             print('self.sample_interval_nip = {}'.format(self.sample_interval_nip))
         #
-        with xp.xipppy_open(use_tcp=self.xipppy_use_tcp):
+        with self.xp.xipppy_open(use_tcp=self.xipppy_use_tcp):
             # get list of channels that actually exist
-            self.allElecs = xp.list_elec('macro')
+            self.allElecs = self.xp.list_elec('macro')
             #
             for signalType in ripple_signal_types:
                 # configure list of channels to stream
@@ -94,7 +147,7 @@ class XipppyBuffer(Node):
                 self.channels[signalType] = [
                     chanNum
                     for chanNum in presentChannels
-                    if xp.signal(chanNum, signalType)]
+                    if self.xp.signal(chanNum, signalType)]
                 # update nb of channels
                 thisNumChans = len(self.channels[signalType])
                 sr = self.outputs[signalType].spec['sample_rate']
@@ -134,7 +187,7 @@ class XipppyBuffer(Node):
         self.thread.wait()
     
     def _close(self):
-        xp._close()
+        self.xp._close()
 
 
 class XipppyThread(QtCore.QThread):
@@ -161,14 +214,14 @@ class XipppyThread(QtCore.QThread):
         with self.lock:
             self.running = True
         #
-        with xp.xipppy_open(use_tcp=self.node.xipppy_use_tcp):
+        with self.node.xp.xipppy_open(use_tcp=self.node.xipppy_use_tcp):
             first_buffer = True
             while True:
                 with self.lock:
                     if not self.running:
                         break
                 # get current nip time
-                self.head = xp.time()
+                self.head = self.node.xp.time()
                 time.sleep(self.node.latency_padding_sec)
                 if first_buffer:
                     self.last_nip_time = self.head - self.node.sample_interval_nip
@@ -198,7 +251,7 @@ class XipppyThread(QtCore.QThread):
                             delta_nip_time *
                             self.node.outputs[signalType].spec['sample_rate'] / 3e4)
                         ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
-                        [data, _] = ripple_dataReaderFuns[signalType](
+                        [data, _] = self.node.dataReaderFuns[signalType](
                             nPoints, # read the missing number of points
                             # self.max_buffer_nip, # read as many points as you can
                             self.node.channels[signalType],
