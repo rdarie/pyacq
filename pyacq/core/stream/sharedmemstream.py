@@ -29,6 +29,7 @@ class SharedMemSender(DataSender):
       row-major; the time axis comes first in the axis order.
     * fill (float) Value used to fill the buffer where no data is available.
     """
+
     def __init__(self, socket, params):
         DataSender.__init__(self, socket, params)
         self.size = self.params['buffer_size']
@@ -59,6 +60,7 @@ class SharedMemSender(DataSender):
 
 
 class SharedMemReceiver(DataReceiver):
+    
     def __init__(self, socket, params):
         # init data receiver with no ring buffer; we will implement our own from shm.
         DataReceiver.__init__(self, socket, params)
@@ -66,8 +68,8 @@ class SharedMemReceiver(DataReceiver):
         self.size = self.params['buffer_size']
         shape = (self.size,) + tuple(self.params['shape'][1:])
         self.buffer = RingBuffer(
-        shape=shape, dtype=self.params['dtype'], double=self.params['double'],
-        shmem=self.params['shm_id'], axisorder=self.params['axisorder'])
+            shape=shape, dtype=self.params['dtype'], double=self.params['double'],
+            shmem=self.params['shm_id'], axisorder=self.params['axisorder'])
 
     def recv(self, return_data=False):
         """Receive message indicating the index of the next data chunk.

@@ -62,9 +62,6 @@ class SharedMem:
         return np.ndarray(
             buffer=self.shm.buf, shape=shape,
             strides=strides, offset=offset, dtype=dtype)        
-        
-
-
 
 
 class SharedArray:

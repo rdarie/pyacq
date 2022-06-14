@@ -479,8 +479,7 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
                 # if self.last_t_min is not None:
                 #     changeInT = t_min - self.last_t_min
                 #     self.t = self.t + changeInT
-                #
-                self.t = t_max - xsize*(1-xratio)
+                self.t = t_max - xsize * (1 - xratio)
                 self.last_t_min = t_min
                 # print('play_pause_status: self.t = {:.2f}'.format(self.t))
             self.parentViewer.navigation_toolbar.seek(self.t)

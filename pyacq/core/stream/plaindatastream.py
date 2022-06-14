@@ -76,8 +76,9 @@ class PlainDataReceiver(DataReceiver):
         # convert to array
         dtype = make_dtype(self.params['dtype']) # this avoid some bugs but is not efficient because this is call every sends...
         #~ dtype = self.params['dtype']
-        data = np.ndarray(buffer=data, shape=shape,
-                          strides=strides, offset=offset, dtype=dtype)        
+        data = np.ndarray(
+            buffer=data, shape=shape,
+            strides=strides, offset=offset, dtype=dtype)        
         return index, data
 
 

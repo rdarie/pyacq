@@ -327,7 +327,7 @@ class XipppyThread(QtCore.QThread):
                     delta_nip_time = self.head - self.last_nip_time
                     if self.node.verbose:
                         print('Warning! self.last_nip_time is more than 5 sec in the past')
-                # 
+                #
                 for signalType in ripple_signal_types:
                     thisNumChans = self.node.outputs[signalType].spec['nb_channel']
                     if first_buffer:

@@ -182,7 +182,6 @@ class OutputStream(object):
         self.sender.reset_index()
 
 
-
 def _shape_equal(shape1, shape2):
     """
     Check if shape of stream are compatible.
