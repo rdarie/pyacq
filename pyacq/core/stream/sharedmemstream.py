@@ -64,7 +64,6 @@ class SharedMemReceiver(DataReceiver):
     def __init__(self, socket, params):
         # init data receiver with no ring buffer; we will implement our own from shm.
         DataReceiver.__init__(self, socket, params)
-
         self.size = self.params['buffer_size']
         shape = (self.size,) + tuple(self.params['shape'][1:])
         self.buffer = RingBuffer(

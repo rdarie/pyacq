@@ -35,7 +35,7 @@ default_params = [
     {'name': 'antialias', 'type': 'bool', 'value': False},
     {'name': 'refresh_interval', 'type': 'int', 'value': 100, 'limits':[5, 1000]},
     {'name': 'decimate', 'type': 'int', 'value': 1, 'limits': [1, None], },
-    {'name': 'decimation_method', 'type': 'list', 'value': 'min_max', 'values': ['min_max', 'mean', 'pure_decimate',  ]},
+    {'name': 'decimation_method', 'type': 'list', 'value': 'pure_decimate', 'values': ['min_max', 'mean', 'pure_decimate',  ]},
     {'name': 'line_width', 'type': 'float', 'value': 1., 'limits': (0, np.inf)},
     ]
 
@@ -54,6 +54,7 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
         self.stream = stream
         self.signals = stream.buffer
         self.sample_rate = float(stream.params['sample_rate'])
+        self.reference_signal = None
         #
         t_start = 0.
         if 't_start' in stream.params:
@@ -98,7 +99,10 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
         return self.signals.index()
 
     def get_chunk(self, i_start=None, i_stop=None):
-        return self.signals.get_data(i_start, i_stop, copy=False, join=True)
+        sig_chunk = self.signals.get_data(i_start, i_stop, copy=True, join=True)
+        if self.reference_signal is not None:
+            sig_chunk = sig_chunk - sig_chunk[:, self.reference_signal][:, None]
+        return sig_chunk
     
     def time_to_index(self, t):
         ind = int(t * self.sample_rate)
@@ -411,7 +415,28 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self.viewBox.xsize_zoom.connect(self.params_controller.apply_xsize_zoom)
         self.viewBox.ygain_zoom.connect(self.params_controller.apply_ygain_zoom)
 
-    def on_param_change(self, params=None, changes=None):
+    def make_params(
+            self, global_params=None, by_channel_params=None):
+        # Create parameters
+        all = []
+        for i in range(self.source.nb_channel):
+            #TODO add name, hadrware index, id
+            name = 'ch{}'.format(i)
+            children =[{'name': 'name', 'type': 'str', 'value': self.source.get_channel_name(i), 'readonly':True}]
+            children += by_channel_params
+            all.append({'name': name, 'type': 'group', 'children': children})
+        self.by_channel_params = pg.parametertree.Parameter.create(
+            name='Channels', type='group', children=all)
+        self.params = pg.parametertree.Parameter.create(
+            name='Global options',
+            type='group', children=global_params)
+        self.all_params = pg.parametertree.Parameter.create(
+            name='all param',
+            type='group', children=[self.params, self.by_channel_params])
+        self.all_params.sigTreeStateChanged.connect(self.on_param_change)
+
+    def on_param_change(
+            self, params=None, changes=None):
         #~ print('on_param_change')
         #track if new scale mode
         for param, change, data in changes:
@@ -436,6 +461,11 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
                     font = label.textItem.font()
                     font.setPointSize(self.params['label_size'])
                     label.setFont(font)
+            if param.name()=='reference_signal':
+                if self.params['reference_signal'] in self.source.channel_names:
+                    self.source.reference_signal = self.source.channel_names.index(self.params['reference_signal'])
+                elif self.params['reference_signal'] == 'none':
+                    self.source.reference_signal = None
 
     def auto_scale(self):
         #~ print('auto_scale', self.last_sigs_chunk)
@@ -461,9 +491,40 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         xsize = self.params['xsize']
         xratio = self.params['xratio']
         decimation_method = self.params['decimation_method']
+        #
+        visibles, = np.nonzero(self.params_controller.visible_channels)
+        # print(self.params_controller.visible_channels)
+        total_gains = self.params_controller.total_gains
+        total_offsets = self.params_controller.total_offsets
+        #
+        t_min = self.source.index_to_time(self.source.get_first_index())
+        t_max = self.source.index_to_time(self.source.get_last_index())
+        #
+        if (self.parentViewer is not None):
+            if self.parentViewer.navigation_toolbar.play_pause_status:
+                # if self.last_t_min is not None:
+                #     changeInT = t_min - self.last_t_min
+                #     self.t = self.t + changeInT
+                self.t = t_max - xsize * (1 - xratio)
+                self.last_t_min = t_min
+                # print('play_pause_status: self.t = {:.2f}'.format(self.t))
+            if self.controlsParentViewer:
+                self.parentViewer.navigation_toolbar.seek(self.t)
+        t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
+        #
+        (
+            self.t, t_start, t_stop,
+            visibles, dict_curves, times_curves,
+            sigs_chunk, dict_scatter) = (
+                self.get_data(
+                    self.t, t_start, t_stop,
+                    total_gains, total_offsets, visibles, decimation_method)
+                )
+        # draw
+        self.on_data_ready(
+            self.t, t_start, t_stop, visibles,
+            dict_curves, times_curves, sigs_chunk, dict_scatter)
         ## adjust mainviewer bounds
-        t_min = self.source.index_to_time(self.source.signals.first_index())
-        t_max = self.source.index_to_time(self.source.signals.index())
         # print('t_min {:.1f}, self.t {:.1f}, t_max {:.1f}'.format(t_min, self.t, t_max))
         #
         if (self.parentViewer is not None) and self.controlsParentViewer:
@@ -475,37 +536,104 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
                 t_max)
             self.parentViewer.navigation_toolbar.set_start_stop(
                 nav_t_start, nav_t_stop, seek=False)
-            if self.parentViewer.navigation_toolbar.play_pause_status:
-                # if self.last_t_min is not None:
-                #     changeInT = t_min - self.last_t_min
-                #     self.t = self.t + changeInT
-                self.t = t_max - xsize * (1 - xratio)
-                self.last_t_min = t_min
-                # print('play_pause_status: self.t = {:.2f}'.format(self.t))
-            self.parentViewer.navigation_toolbar.seek(self.t)
-        t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
-        #
-        visibles, = np.nonzero(self.params_controller.visible_channels)
-        total_gains = self.params_controller.total_gains
-        total_offsets = self.params_controller.total_offsets
-        #
-        (
-            self.t, t_start, t_stop,
-            visibles, dict_curves, times_curves,
-            sigs_chunk, dict_scatter) = (
-                self.get_data(
-                    self.t, t_start, t_stop,
-                    total_gains, total_offsets, visibles, decimation_method)
-            )
-        self.on_data_ready(
-            self.t, t_start, t_stop, visibles,
-            dict_curves, times_curves, sigs_chunk, dict_scatter)
+        return
 
     def _on_new_data(self, pos, data):
         # xsize = self.params['xsize']
         # xratio = self.params['xratio']
         # self._head = pos
         pass
+
+    def get_data(
+            self, t, t_start, t_stop,
+            total_gains, total_offsets, visibles, decimation_method):
+        #
+        i_start, i_stop = (
+            self.source.time_to_index(t_start),
+            self.source.time_to_index(t_stop) + 2)
+        # print(t_start, t_stop, i_start, i_stop)
+        ds_ratio = (i_stop - i_start)//self._max_point + 1
+        #~ print()
+        #~ print('ds_ratio', ds_ratio, 'i_start i_stop', i_start, i_stop  )
+
+        if ds_ratio>1:
+            i_start = i_start + ds_ratio - (i_start%ds_ratio)
+            i_stop = i_stop - (i_stop%ds_ratio)
+            #~ print('i_start, i_stop', i_start, i_stop)
+
+        #clip it
+        index_padding = 0
+        i_start = max(self.source.get_first_index() + index_padding, i_start)
+        i_start = min(i_start, self.source.get_last_index() - index_padding)
+        #
+        i_stop = max(self.source.get_first_index() + index_padding, i_stop)
+        i_stop = min(i_stop, self.source.get_last_index() - index_padding)
+        # print(t_start, t_stop, i_start, i_stop)
+        #
+        if ds_ratio>1:
+            #after clip
+            i_start = i_start + ds_ratio - (i_start%ds_ratio)
+            i_stop = i_stop - (i_stop%ds_ratio)
+
+        #~ print('final i_start i_stop', i_start, i_stop  )
+
+        sigs_chunk = self.source.get_chunk(i_start=i_start, i_stop=i_stop)
+        #~ print('sigs_chunk.shape', sigs_chunk.shape)
+        data_curves = sigs_chunk[:, visibles].T
+        if data_curves.dtype != 'float32':
+            data_curves = data_curves.astype('float32')
+
+        if ds_ratio>1:
+            small_size = (data_curves.shape[1]//ds_ratio)
+            if decimation_method == 'min_max':
+                small_size *= 2
+
+            small_arr = np.empty((data_curves.shape[0], small_size), dtype=data_curves.dtype)
+
+            if decimation_method == 'min_max' and data_curves.size > 0:
+                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
+                small_arr[:, ::2] = full_arr.max(axis=2)
+                small_arr[:, 1::2] = full_arr.min(axis=2)
+            elif decimation_method == 'mean' and data_curves.size > 0:
+                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
+                small_arr[:, :] = full_arr.mean(axis=2)
+            elif decimation_method == 'pure_decimate':
+                small_arr[:, :] = data_curves[:, ::ds_ratio]
+            elif data_curves.size == 0:
+                pass
+
+            data_curves = small_arr
+
+        #~ print(data_curves.shape)
+
+        data_curves *= total_gains[visibles, None]
+        data_curves += total_offsets[visibles, None]
+        dict_curves = {}
+        for i, c in enumerate(visibles):
+            dict_curves[c] = data_curves[i, :]
+
+        #~ print(ds_ratio)
+        t_start2 = self.source.index_to_time(i_start)
+        times_curves = np.arange(data_curves.shape[1], dtype='float64') # ensure high temporal precision (see issue #28)
+        times_curves /= self.source.sample_rate/ds_ratio
+        if ds_ratio>1 and decimation_method == 'min_max':
+            times_curves /=2
+        times_curves += t_start2
+
+        dict_scatter = None
+        if self.source.with_scatter:
+            pass
+            dict_scatter = {}
+            for k in self.source.get_scatter_babels():
+                x, y = [[]], [[]]
+                for i, c in enumerate(visibles):
+                    scatter_inds = self.source.get_scatter(i_start=i_start, i_stop=i_stop, chan=c, label=k)
+                    if scatter_inds is None: continue
+                    x.append((scatter_inds-i_start)/self.source.sample_rate+t_start2)
+                    y.append(sigs_chunk[scatter_inds-i_start, c]*total_gains[c]+total_offsets[c])
+                dict_scatter[k] = (np.concatenate(x), np.concatenate(y))
+
+        return t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter
 
     def on_data_ready(
             self, t, t_start, t_stop, visibles,
@@ -580,104 +708,11 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         #~ self.graphicsview.repaint()
         return
 
-    def get_data(
-            self, t, t_start, t_stop,
-            total_gains, total_offsets, visibles, decimation_method):
-        #
-        i_start, i_stop = (
-            self.source.time_to_index(t_start),
-            self.source.time_to_index(t_stop) + 2)
-        # print(t_start, t_stop, i_start, i_stop)
-        ds_ratio = (i_stop - i_start)//self._max_point + 1
-        #~ print()
-        #~ print('ds_ratio', ds_ratio, 'i_start i_stop', i_start, i_stop  )
-
-        if ds_ratio>1:
-            i_start = i_start + ds_ratio - (i_start%ds_ratio)
-            i_stop = i_stop - (i_stop%ds_ratio)
-            #~ print('i_start, i_stop', i_start, i_stop)
-
-        #clip it
-        index_padding = 0
-        i_start = max(self.source.get_first_index() + index_padding, i_start)
-        i_start = min(i_start, self.source.get_last_index() - index_padding)
-        #
-        i_stop = max(self.source.get_first_index() + index_padding, i_stop)
-        i_stop = min(i_stop, self.source.get_last_index() - index_padding)
-        # print(t_start, t_stop, i_start, i_stop)
-        #
-        if ds_ratio>1:
-            #after clip
-            i_start = i_start + ds_ratio - (i_start%ds_ratio)
-            i_stop = i_stop - (i_stop%ds_ratio)
-
-        #~ print('final i_start i_stop', i_start, i_stop  )
-
-        sigs_chunk = self.source.get_chunk(i_start=i_start, i_stop=i_stop)
-
-        #~ print('sigs_chunk.shape', sigs_chunk.shape)
-        data_curves = sigs_chunk[:, visibles].T.copy()
-        if data_curves.dtype!='float32':
-            data_curves = data_curves.astype('float32')
-
-        if ds_ratio>1:
-            small_size = (data_curves.shape[1]//ds_ratio)
-            if decimation_method == 'min_max':
-                small_size *= 2
-
-            small_arr = np.empty((data_curves.shape[0], small_size), dtype=data_curves.dtype)
-
-            if decimation_method == 'min_max' and data_curves.size>0:
-                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
-                small_arr[:, ::2] = full_arr.max(axis=2)
-                small_arr[:, 1::2] = full_arr.min(axis=2)
-            elif decimation_method == 'mean' and data_curves.size>0:
-                full_arr = data_curves.reshape(data_curves.shape[0], -1, ds_ratio)
-                small_arr[:, :] = full_arr.mean(axis=2)
-            elif decimation_method == 'pure_decimate':
-                small_arr[:, :] = data_curves[:, ::ds_ratio]
-            elif data_curves.size == 0:
-                pass
-
-            data_curves = small_arr
-
-        #~ print(data_curves.shape)
-
-        data_curves *= total_gains[visibles, None]
-        data_curves += total_offsets[visibles, None]
-        dict_curves = {}
-        for i, c in enumerate(visibles):
-            dict_curves[c] = data_curves[i, :]
-
-        #~ print(ds_ratio)
-        t_start2 = self.source.index_to_time(i_start)
-        times_curves = np.arange(data_curves.shape[1], dtype='float64') # ensure high temporal precision (see issue #28)
-        times_curves /= self.source.sample_rate/ds_ratio
-        if ds_ratio>1 and decimation_method == 'min_max':
-            times_curves /=2
-        times_curves += t_start2
-
-        dict_scatter = None
-        if self.source.with_scatter:
-            pass
-            dict_scatter = {}
-            for k in self.source.get_scatter_babels():
-                x, y = [[]], [[]]
-                for i, c in enumerate(visibles):
-                    scatter_inds = self.source.get_scatter(i_start=i_start, i_stop=i_stop, chan=c, label=k)
-                    if scatter_inds is None: continue
-                    x.append((scatter_inds-i_start)/self.source.sample_rate+t_start2)
-                    y.append(sigs_chunk[scatter_inds-i_start, c]*total_gains[c]+total_offsets[c])
-                dict_scatter[k] = (np.concatenate(x), np.concatenate(y))
-
-        return t, t_start, t_stop, visibles, dict_curves, times_curves, sigs_chunk, dict_scatter
-
     def _check_nb_channel(self):
         self.nb_channel = self.inputs['signals'].params['shape'][1]
 
     def _configure(
-            self, with_user_dialog=True, max_xsize=60.,
-            window_label='pyacq_scope0'):
+            self, with_user_dialog=True, max_xsize=60.):
         """This method is called during `Node.configure()` and must be
         reimplemented by subclasses.
         """
@@ -697,10 +732,21 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         
         self.sample_rate = self.inputs['signals'].params['sample_rate']
         buf_size = int(self.sample_rate * self.max_xsize)
-        self.inputs['signals'].set_buffer(size=buf_size, axisorder=[1,0], double=True)
+        self.inputs['signals'].set_buffer(
+            size=buf_size, axisorder=[1,0], double=True)
         self.source = InputStreamAnalogSignalSource(self.inputs['signals'])
-        
-        self.make_params()
+
+        global_params = default_params.copy()
+        global_params.append(
+            {
+                'name': 'reference_signal',
+                'type': 'list',
+                'value': 'none',
+                'values': ['none',] + self.source.channel_names}
+            ) # self.source.channel_names
+        by_channel_params = default_by_channel_params.copy()
+        self.make_params(
+            global_params=global_params, by_channel_params=by_channel_params)
 
         # useOpenGL=True eliminates the extremely poor performance associated
         # with TraceViewer's line_width > 1.0, but it also degrades overall
@@ -708,7 +754,6 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self.set_layout(useOpenGL=self.useOpenGL)
 
         self.make_param_controller()
-
         self.viewBox.doubleclicked.connect(self.show_params_controller)
 
         self.initialize_plot()
@@ -723,18 +768,19 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
 
         # self.datagrabber.data_ready.connect(self.on_data_ready)
         # self.request_data.connect(self.datagrabber.on_request_data)
-        # pdb.set_trace()
+        
         # poller
         self.poller = ThreadPollInput(
             input_stream=self.inputs['signals'], return_data=None)
-        self.poller.new_data.connect(self._on_new_data)
+        # self.poller.new_data.connect(self._on_new_data)
+
         # timer
-        # self._head = 0
+        self._head = 0
         self.timer = QT.QTimer(singleShot=False, interval=100)
         self.timer.timeout.connect(self.refresh)
 
     def _start(self):
-        # self._head = 0
+        self._head = 0
         self.estimate_decimate()
         self.reset_curves_data()
         self.poller.start()

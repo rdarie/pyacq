@@ -12,7 +12,7 @@ from .ringbuffer import RingBuffer
 from .streamhelpers import all_transfermodes
 from ..rpc import ObjectProxy
 from .arraytools import fix_struct_dtype, make_dtype
-
+import pdb
 
 default_stream = dict(
     protocol='tcp',
@@ -280,13 +280,11 @@ class InputStream(object):
         self.socket.setsockopt(zmq.SUBSCRIBE, b'')
         #~ self.socket.setsockopt(zmq.DELAY_ATTACH_ON_CONNECT,1)
         self.socket.connect(self.url)
-        
         transfermode = self.params['transfermode']
         if transfermode not in all_transfermodes:
             raise ValueError("Unsupported transfer mode '%s'" % transfermode)
         receiver_class = all_transfermodes[transfermode][1]
         self.receiver = receiver_class(self.socket, self.params)
-        
         self.connected = True
         if self.node and self.node():
             self.node().after_input_connect(self.name)        
@@ -384,7 +382,9 @@ class InputStream(object):
         # attach a new buffer
         shape = (size,) + tuple(self.params['shape'][1:])
         dtype = make_dtype(self.params['dtype'])
-        self.buffer = RingBuffer(shape=shape, dtype=dtype, double=double, axisorder=axisorder, shmem=shmem, fill=fill)
+        self.buffer = RingBuffer(
+            shape=shape, dtype=dtype, double=double, axisorder=axisorder,
+            shmem=shmem, fill=fill)
         self._own_buffer = True
     
     def reset_buffer_index(self):

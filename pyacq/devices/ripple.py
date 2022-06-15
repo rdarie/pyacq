@@ -7,7 +7,7 @@ import xipppy as xp
 import numpy as np
 from scipy import signal
 import time
-from copy import copy
+from copy import copy, deepcopy
 
 from ..core import Node, register_node_type
 from pyqtgraph.Qt import QtCore # , QtGui
@@ -24,6 +24,13 @@ ripple_dataReaderFuns = {
     'lfp': xp.cont_lfp,
     }
 
+ripple_sample_rates = {
+    'raw': int(30e3),
+    'hi-res': int(2e3),
+    'hifreq': int(15e3),
+    'lfp': int(1e3),
+    }
+
 # dummy input
 def dummyRandom(
         npoints=None, elecs=None,
@@ -34,7 +41,6 @@ def dummyRandom(
         size=(1, npoints * nb_channel)).astype('float32')
     timestamp = start_timestamp
     return data, timestamp
-
 
 def randomSineGenerator(
         centerFreq=20, sr=1000,
@@ -79,38 +85,52 @@ def randomChirpGenerator(
         return data, timestamp
     return dummyRandomChirp
 
-
 class DummyXipppy():
+
+    default_signal_type_lookup = {
+        'raw': [],
+        'hi-res': [eNum for eNum in range(1, 65)],
+        'hifreq': [eNum for eNum in range(1, 65)],
+        'lfp': [],
+        }
+
     def __init__(
             self,
-            raw_fun=None, hires_fun=None, hifreq_fun=None, lfp_fun=None):
+            raw_fun=None, hires_fun=None, 
+            hifreq_fun=None, lfp_fun=None,
+            signal_type_lookup=None):
         if raw_fun is None:
-            self.raw_fun = dummyRandom
+            self.raw_fun = randomSineGenerator(
+                centerFreq=40, sr=ripple_sample_rates['raw'],
+                noiseStd=0.05, sineAmp=1.)
         else:
             self.raw_fun = raw_fun
 
         if hires_fun is None:
-            self.hires_fun = dummyRandom
+            self.hires_fun = randomSineGenerator(
+                centerFreq=40, sr=ripple_sample_rates['hi-res'],
+                noiseStd=0.05, sineAmp=1.)
         else:
             self.hires_fun = hires_fun
 
         if hifreq_fun is None:
-            self.hifreq_fun = dummyRandom
+            self.hifreq_fun = randomChirpGenerator(
+                startFreq=10, stopFreq=40, freqPeriod=2.,
+                sr=ripple_sample_rates['hifreq'], noiseStd=0.05, sineAmp=1.)
         else:
             self.hifreq_fun = hifreq_fun
 
         if lfp_fun is None:
-            self.lfp_fun = dummyRandom
+            self.lfp_fun = randomSineGenerator(
+                centerFreq=40, sr=ripple_sample_rates['lfp'],
+                noiseStd=0.05, sineAmp=1.)
         else:
             self.lfp_fun = lfp_fun
         #
-        self.signal_type_lookup = {
-            'raw': [],
-            'hi-res': [eNum for eNum in range(1, 65)],
-            'hifreq': [eNum for eNum in range(1, 65)],
-            'lfp': [],
-            }
-
+        self.signal_type_lookup = deepcopy(
+            self.default_signal_type_lookup)
+        if signal_type_lookup is not None:
+            self.signal_type_lookup.update(signal_type_lookup)
 
     def xipppy_open(self, use_tcp=True):
         return nullcontext()
@@ -119,7 +139,7 @@ class DummyXipppy():
         return chanNum in self.signal_type_lookup[signalType]
 
     def list_elec(self, feType):
-        return [eNum for eNum in range(1, 65)]
+        return [eNum for eNum in range(1, 257)]
 
     def _close(self):
         return
@@ -140,6 +160,7 @@ class DummyXipppy():
     def cont_lfp(self, npoints, elecs, start_timestamp):
         return self.lfp_fun(npoints, elecs, start_timestamp)
 
+
 class XipppyBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
@@ -148,16 +169,20 @@ class XipppyBuffer(Node):
     _output_specs = {
         'raw': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(30e3), 'compression': ''},
+            'sample_rate': ripple_sample_rates['raw'],
+            'compression': ''},
         'hi-res': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(2e3), 'compression': ''},
+            'sample_rate': ripple_sample_rates['hi-res'],
+            'compression': ''},
         'hifreq': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(15e3), 'compression': ''},
+            'sample_rate': ripple_sample_rates['hifreq'],
+            'compression': ''},
         'lfp': {
             'streamtype': 'analogsignal', 'dtype': 'float32',
-            'sample_rate': int(1e3), 'compression': ''},
+            'sample_rate': ripple_sample_rates['lfp'],
+            'compression': ''},
         }
     
 
@@ -289,7 +314,7 @@ class XipppyThread(QtCore.QThread):
         #
         self.head = 0
         self.last_nip_time = 0
-        self.buffers = {}
+        # self.buffers = {}
         self.buffers_num_samples = {}
         self.num_requests = 0
         #
@@ -343,19 +368,16 @@ class XipppyThread(QtCore.QThread):
                             self.node.channels[signalType],
                             self.last_nip_time + 1 # start with last missing sample
                             )
-                        self.buffers[signalType] = np.reshape(
-                            np.asarray(data), self.node.outputs[signalType].spec['shape'], order='F')
+                        data = np.reshape(data, self.node.outputs[signalType].spec['shape'], order='F')
                         if self.node.verbose:
                             print('signal type {}\n\tread {} samples x {} chans'.format(
-                                signalType, self.buffers[signalType].shape[0], self.buffers[signalType].shape[1]))
-                            buffer_duration = self.buffers[signalType].shape[0] / self.node.outputs[signalType].spec['sample_rate']
+                                signalType, data.shape[0], data.shape[1]))
+                            buffer_duration = data.shape[0] / self.node.outputs[signalType].spec['sample_rate']
                             print('\tbuffer duration: {:.3f} sec'.format(buffer_duration))
                             # print('data > 0 sum: {}'.format(np.sum((np.abs(np.asarray(data)) > 0))))
-                        self.buffers_num_samples[signalType] += self.buffers[signalType].shape[0]
-                        self.node.outputs[signalType].send(
-                            self.buffers[signalType],
-                            index=self.buffers_num_samples[signalType]
-                            )
+                        self.buffers_num_samples[signalType] += data.shape[0]
+                        # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
+                        self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
                 #
                 first_buffer = False
                 self.num_requests += 1
@@ -364,10 +386,12 @@ class XipppyThread(QtCore.QThread):
                     if self.num_requests > 3:
                         self.running = False
                 t_sleep = max(0., self.node.sample_interval_sec - time.perf_counter() + t_start_loop)
+                # print('sleeping for {} sec'.format(t_sleep))
                 time.sleep(t_sleep)
 
     def stop(self):
         with self.lock:
             self.running = False
+
 
 register_node_type(XipppyBuffer)
