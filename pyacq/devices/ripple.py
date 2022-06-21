@@ -175,19 +175,19 @@ class XipppyBuffer(Node):
 
     _output_specs = {
         'raw': {
-            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'streamtype': 'analogsignal', 'dtype': 'float64',
             'sample_rate': ripple_sample_rates['raw'],
             'compression': ''},
         'hi-res': {
-            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'streamtype': 'analogsignal', 'dtype': 'float64',
             'sample_rate': ripple_sample_rates['hi-res'],
             'compression': ''},
         'hifreq': {
-            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'streamtype': 'analogsignal', 'dtype': 'float64',
             'sample_rate': ripple_sample_rates['hifreq'],
             'compression': ''},
         'lfp': {
-            'streamtype': 'analogsignal', 'dtype': 'float32',
+            'streamtype': 'analogsignal', 'dtype': 'float64',
             'sample_rate': ripple_sample_rates['lfp'],
             'compression': ''},
         'stim': {
@@ -397,6 +397,7 @@ class XipppyThread(QtCore.QThread):
                         self.node.channels[signalType],
                         self.last_nip_time + 1 # start with last missing sample
                         )
+                    pdb.set_trace()
                     data = np.reshape(data, self.node.outputs[signalType].spec['shape'], order='F')
                     if self.node.verbose:
                         print('signal type {}\n\tread {} samples x {} chans'.format(
