@@ -99,7 +99,7 @@ def fix_struct_dtype(dt):
     
     """
     if isinstance(dt, list):
-        dt = [ (k,v) for k,v in dt]
+        dt = [tuple(item) for item in dt]
         return dt
     else:
         return dt
@@ -124,7 +124,7 @@ def make_dtype(dt):
     elif isinstance(dt, str):
         dt = np.dtype(dt)
     elif isinstance(dt, list):
-        dt = np.dtype([ (k,v) for k,v in dt])
+        dt = np.dtype(fix_struct_dtype(dt))
     else:
         try:
             dt = np.dtype(dt)

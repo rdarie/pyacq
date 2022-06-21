@@ -14,14 +14,21 @@ from pyqtgraph.Qt import QtCore # , QtGui
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
 
-ripple_signal_types = ['raw', 'hi-res', 'hifreq', 'lfp']
+ripple_analogsignal_types = ['raw', 'hi-res', 'hifreq', 'lfp']
+ripple_event_types = ['stim'] # 'macro' does not have 'spk' type
+ripple_signal_types = ripple_analogsignal_types + ripple_event_types
 ripple_fe_types = ['macro'] # TODO: iterate front end types
+_dtype_segmentDataPacket = [
+    ('timestamp', 'int', (1,)), ('channel', 'int', (1,)),
+    ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
 
 ripple_dataReaderFuns = {
     'raw': xp.cont_raw,
     'hi-res': xp.cont_hires,
     'hifreq': xp.cont_hifreq,
     'lfp': xp.cont_lfp,
+    'spk': xp.spk_data,
+    'stim': xp.stim_data
     }
 
 ripple_sample_rates = {
@@ -183,8 +190,12 @@ class XipppyBuffer(Node):
             'streamtype': 'analogsignal', 'dtype': 'float32',
             'sample_rate': ripple_sample_rates['lfp'],
             'compression': ''},
+        'stim': {
+            'streamtype': 'event', 'shape': (-1,),
+            'dtype': _dtype_segmentDataPacket},
+        # 'spk': {
+        #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
         }
-    
 
     def __init__(self, dummy=False, dummy_kwargs=dict(), **kargs):
         Node.__init__(self, **kargs)
@@ -196,6 +207,8 @@ class XipppyBuffer(Node):
                 'hi-res': self.xp.cont_hires,
                 'hifreq': self.xp.cont_hifreq,
                 'lfp': self.xp.cont_lfp,
+                'spk': self.xp.spk_data,
+                'stim': self.xp.stim_data,
                 }
         else:
             self.dataReaderFuns = ripple_dataReaderFuns
@@ -210,6 +223,9 @@ class XipppyBuffer(Node):
         self.buffer_padding_sec = None
         self.latency_padding_sec = None
         self.allElecs = []
+        self.present_analogsignal_types = []
+        self.present_event_types = []
+        self.present_signal_types = []
         self.thread = None
         self.xipppy_use_tcp = True
 
@@ -254,30 +270,41 @@ class XipppyBuffer(Node):
                         ]
                 else:
                     presentChannels = self.allElecs
-                self.channels[signalType] = [
-                    chanNum
-                    for chanNum in presentChannels
-                    if self.xp.signal(chanNum, signalType)]
+                if signalType in ripple_analogsignal_types:
+                    self.channels[signalType] = [
+                        chanNum
+                        for chanNum in presentChannels
+                        if self.xp.signal(chanNum, signalType)]
+                elif signalType in ripple_event_types:
+                    self.channels[signalType] = [
+                        chanNum
+                        for chanNum in presentChannels]
                 # update nb of channels
                 thisNumChans = len(self.channels[signalType])
-                sr = self.outputs[signalType].spec['sample_rate']
-                self.outputs[signalType].spec.update({
-                    'nb_channel': thisNumChans,
-                    'chunksize': int(sr * self.sample_chunksize_sec),
-                    'buffer_size': int(sr * (self.sample_interval_sec + self.buffer_padding_sec)),
-                    })
-                #
                 if self.verbose:
                     print('Signal type {}, {} channels found.'.format(signalType, thisNumChans))
-                if thisNumChans > 0:
-                    #
+                self.outputs[signalType].spec.update({
+                    'nb_channel': thisNumChans,
+                    })
+                if signalType in ripple_analogsignal_types:
+                    sr = self.outputs[signalType].spec['sample_rate']
                     self.outputs[signalType].spec.update({
-                        'shape': (-1, thisNumChans),
+                        'chunksize': int(sr * self.sample_chunksize_sec),
+                        'buffer_size': int(sr * (self.sample_interval_sec + self.buffer_padding_sec)),
                         })
-                    if self.verbose:
-                        print(
-                            "Setting self.outputs['{}'].spec['shape'] = {}".format(
-                                signalType, (-1, thisNumChans) ))
+                    if thisNumChans > 0:
+                        self.outputs[signalType].spec.update({
+                            'shape': (-1, thisNumChans),
+                            })
+                        if self.verbose:
+                            print(
+                                "Setting self.outputs['{}'].spec['shape'] = {}".format(
+                                    signalType, (-1, thisNumChans) ))
+                        self.present_analogsignal_types.append(signalType)
+                elif signalType in ripple_event_types:
+                    if thisNumChans > 0:
+                        self.present_event_types.append(signalType)
+            self.present_signal_types = self.present_analogsignal_types + self.present_event_types
     
     def after_output_configure(self, signalType):
         channel_info = [
@@ -299,6 +326,10 @@ class XipppyBuffer(Node):
     def _close(self):
         self.xp._close()
 
+
+def _spikeKeyExtractor(pair):
+    # pair = (chanIdx, segmentDataPacket)
+    return pair[1].timestamp
 
 class XipppyThread(QtCore.QThread):
     """
@@ -353,32 +384,67 @@ class XipppyThread(QtCore.QThread):
                     if self.node.verbose:
                         print('Warning! self.last_nip_time is more than 5 sec in the past')
                 #
-                for signalType in ripple_signal_types:
-                    thisNumChans = self.node.outputs[signalType].spec['nb_channel']
+                for signalType in self.node.present_analogsignal_types:
                     if first_buffer:
                         self.buffers_num_samples[signalType] = 0
-                    if thisNumChans > 0:
-                        nPoints = int(
-                            delta_nip_time *
-                            self.node.outputs[signalType].spec['sample_rate'] / 3e4)
-                        ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
-                        [data, _] = self.node.dataReaderFuns[signalType](
-                            nPoints, # read the missing number of points
-                            # self.max_buffer_nip, # read as many points as you can
-                            self.node.channels[signalType],
-                            self.last_nip_time + 1 # start with last missing sample
-                            )
-                        data = np.reshape(data, self.node.outputs[signalType].spec['shape'], order='F')
-                        if self.node.verbose:
-                            print('signal type {}\n\tread {} samples x {} chans'.format(
-                                signalType, data.shape[0], data.shape[1]))
-                            buffer_duration = data.shape[0] / self.node.outputs[signalType].spec['sample_rate']
-                            print('\tbuffer duration: {:.3f} sec'.format(buffer_duration))
-                            # print('data > 0 sum: {}'.format(np.sum((np.abs(np.asarray(data)) > 0))))
-                        self.buffers_num_samples[signalType] += data.shape[0]
-                        # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
-                        self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
-                #
+                    nPoints = int(
+                        delta_nip_time *
+                        self.node.outputs[signalType].spec['sample_rate'] / 3e4)
+                    ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
+                    [data, _] = self.node.dataReaderFuns[signalType](
+                        nPoints, # read the missing number of points
+                        # self.max_buffer_nip, # read as many points as you can
+                        self.node.channels[signalType],
+                        self.last_nip_time + 1 # start with last missing sample
+                        )
+                    data = np.reshape(data, self.node.outputs[signalType].spec['shape'], order='F')
+                    if self.node.verbose:
+                        print('signal type {}\n\tread {} samples x {} chans'.format(
+                            signalType, data.shape[0], data.shape[1]))
+                        buffer_duration = data.shape[0] / self.node.outputs[signalType].spec['sample_rate']
+                        print('\tbuffer duration: {:.3f} sec'.format(buffer_duration))
+                        # print('data > 0 sum: {}'.format(np.sum((np.abs(np.asarray(data)) > 0))))
+                    self.buffers_num_samples[signalType] += data.shape[0]
+                    # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
+                    self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
+                # TODO: alternatively, we could just send each channel's payload as it comes
+                # and worry about sorting after the fact
+                sortEventOutputs = False
+                for signalType in self.node.present_event_types:
+                    if sortEventOutputs:
+                        ########################################################
+                        # Sort events by timestamp
+                        chanNums = []
+                        packets = []
+                        for chanIdx in self.node.channels[signalType]:
+                            ## (count, data) = xipppy.stim_data(elecs, max_spk)
+                            [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
+                            chanNums += [chanIdx for _ in packetList]
+                            packets += packetList
+                            if len(packetList) and self.node.verbose:
+                                print([(dat.timestamp, chanIdx, dat.class_id) for dat in packetList])
+                        nPackets = len(packets)
+                        if nPackets > 0:
+                            outputPacket = np.array(
+                                [
+                                    (dat.timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
+                                    for ch, dat in sorted(zip(chanNums, packets), key=_spikeKeyExtractor)],
+                                dtype=_dtype_segmentDataPacket)
+                            self.node.outputs[signalType].send(outputPacket)
+                    else:
+                        ########################################################
+                        # do not sort event outputs
+                        for chanIdx in self.node.channels[signalType]:
+                            ## (count, data) = xipppy.stim_data(elecs, max_spk)
+                            [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
+                            nPackets = len(packetList)
+                            if nPackets > 0:
+                                outputPacket = np.array(
+                                    [
+                                        (dat.timestamp, chanIdx, np.asarray(dat.wf, dtype=int), dat.class_id,)
+                                        for dat in packetList],
+                                    dtype=_dtype_segmentDataPacket)
+                                self.node.outputs[signalType].send(outputPacket)
                 first_buffer = False
                 self.num_requests += 1
                 self.last_nip_time = copy(self.head)
