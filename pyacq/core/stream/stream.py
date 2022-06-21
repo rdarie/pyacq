@@ -29,7 +29,7 @@ default_stream = dict(
     offset=None,
     units='',
     sample_rate=1.,
-    double=False,#make sens only for transfermode='sharemem',
+    double=False, #make sens only for transfermode='sharemem',
     fill=None,
 )
 
@@ -273,7 +273,8 @@ class InputStream(object):
                                 (k, v, k, self.params[k]))
             else:
                 self.params[k] = v
-        
+        if 'dtype' in self.params:
+            self.params['dtype'] = make_dtype(self.params['dtype'])
         context = zmq.Context.instance()
         self.socket = context.socket(zmq.SUB)
         self.socket.linger = 1000  # don't let socket deadlock when exiting

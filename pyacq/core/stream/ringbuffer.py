@@ -176,6 +176,10 @@ class RingBuffer:
         else:
             n = self.buffer.shape[0]-i
             if hasattr(value, '__len__'):
+                valueIsArray = (len(value) > 1)
+            else:
+                valueIsArray = False
+            if valueIsArray:
                 # case array
                 self.buffer[i:] = value[:n]
                 self.buffer[:dsize-n] = value[n:]

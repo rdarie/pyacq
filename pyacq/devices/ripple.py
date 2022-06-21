@@ -8,7 +8,6 @@ import numpy as np
 from scipy import signal
 import time
 from copy import copy, deepcopy
-
 from ..core import Node, register_node_type
 from pyqtgraph.Qt import QtCore # , QtGui
 from pyqtgraph.util.mutex import Mutex
@@ -21,6 +20,13 @@ ripple_fe_types = ['macro'] # TODO: iterate front end types
 _dtype_segmentDataPacket = [
     ('timestamp', 'int', (1,)), ('channel', 'int', (1,)),
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
+#
+_dtype_analogsignal  = [
+    ('timestamp', 'int'), ('value', 'float64')]
+ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
+
+# _dtype_analogsignal = 'float64'
+# ripple_analogsignal_filler = np.nan
 
 ripple_dataReaderFuns = {
     'raw': xp.cont_raw,
@@ -172,27 +178,25 @@ class XipppyBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
-
     _output_specs = {
         'raw': {
-            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates['raw'],
-            'compression': ''},
+            'compression': '', 'fill': ripple_analogsignal_filler},
         'hi-res': {
-            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates['hi-res'],
-            'compression': ''},
+            'compression': '', 'fill': ripple_analogsignal_filler},
         'hifreq': {
-            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates['hifreq'],
-            'compression': ''},
+            'compression': '', 'fill': ripple_analogsignal_filler},
         'lfp': {
-            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates['lfp'],
-            'compression': ''},
+            'compression': '', 'fill': ripple_analogsignal_filler},
         'stim': {
-            'streamtype': 'event', 'shape': (-1,),
-            'dtype': _dtype_segmentDataPacket},
+            'streamtype': 'event', 'shape': (-1,), 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
         }
@@ -346,7 +350,7 @@ class XipppyThread(QtCore.QThread):
         self.head = 0
         self.last_nip_time = 0
         # self.buffers = {}
-        self.buffers_num_samples = {}
+        # self.buffers_num_samples = {}
         self.num_requests = 0
         #
         self.node = node
@@ -354,17 +358,18 @@ class XipppyThread(QtCore.QThread):
     def run(self):
         with self.lock:
             self.running = True
-        #
+        interval = self.node.sample_interval_sec
         with self.node.xp.xipppy_open(use_tcp=self.node.xipppy_use_tcp):
             first_buffer = True
+            next_time = time.perf_counter() + interval
             while True:
                 with self.lock:
                     if not self.running:
                         break
-                t_start_loop = time.perf_counter()
+                # print('sleeping for {} sec'.format(max(0, next_time - time.perf_counter())))
+                time.sleep(max(0, next_time - time.perf_counter()))
                 # get current nip time
                 self.head = self.node.xp.time()
-                time.sleep(self.node.latency_padding_sec)
                 if first_buffer:
                     self.last_nip_time = self.head - self.node.sample_interval_nip
                 # delta_nip_time: actual elapsed ripple ticks since last read
@@ -385,31 +390,42 @@ class XipppyThread(QtCore.QThread):
                         print('Warning! self.last_nip_time is more than 5 sec in the past')
                 #
                 for signalType in self.node.present_analogsignal_types:
-                    if first_buffer:
-                        self.buffers_num_samples[signalType] = 0
-                    nPoints = int(
-                        delta_nip_time *
-                        self.node.outputs[signalType].spec['sample_rate'] / 3e4)
+                    # if first_buffer:
+                    #     self.buffers_num_samples[signalType] = 0
+                    sr = self.node.outputs[signalType].spec['sample_rate']
+                    thisNumChans = self.node.outputs[signalType].spec['nb_channel']
+                    nPoints = int(delta_nip_time * sr / 3e4)
                     ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
-                    [data, _] = self.node.dataReaderFuns[signalType](
+                    [data, timestamp] = self.node.dataReaderFuns[signalType](
                         nPoints, # read the missing number of points
                         # self.max_buffer_nip, # read as many points as you can
                         self.node.channels[signalType],
                         self.last_nip_time + 1 # start with last missing sample
                         )
-                    pdb.set_trace()
-                    data = np.reshape(data, self.node.outputs[signalType].spec['shape'], order='F')
+                    if _dtype_analogsignal == 'float64':
+                        data_out = np.array(data, dtype=_dtype_analogsignal)
+                    else:
+                        tOneChan = timestamp + np.arange(len(data) / thisNumChans, dtype='int') * np.round(3e4 / sr).astype('int')
+                        # data = np.array([item for item in zip(t, data)], dtype=_dtype_analogsignal)
+                        data_out = np.empty((len(data),), dtype=_dtype_analogsignal)
+                        data_out['timestamp'] = np.tile(tOneChan, thisNumChans)
+                        data_out['value'] = data
+                    data_out = data_out.reshape(self.node.outputs[signalType].spec['shape'], order='F')
                     if self.node.verbose:
                         print('signal type {}\n\tread {} samples x {} chans'.format(
-                            signalType, data.shape[0], data.shape[1]))
-                        buffer_duration = data.shape[0] / self.node.outputs[signalType].spec['sample_rate']
+                            signalType, data_out.shape[0], data.shape[1]))
+                        buffer_duration = data_out.shape[0] / self.node.outputs[signalType].spec['sample_rate']
                         print('\tbuffer duration: {:.3f} sec'.format(buffer_duration))
                         # print('data > 0 sum: {}'.format(np.sum((np.abs(np.asarray(data)) > 0))))
-                    self.buffers_num_samples[signalType] += data.shape[0]
+                    # self.buffers_num_samples[signalType] += data.shape[0]
                     # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
-                    self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
-                # TODO: alternatively, we could just send each channel's payload as it comes
-                # and worry about sorting after the fact
+                    # self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
+                    if first_buffer:
+                        self.node.outputs[signalType].spec.update({
+                            't_start': timestamp / 3e4,
+                            })
+                    self.node.outputs[signalType].send(data_out)
+                # send stim events
                 sortEventOutputs = False
                 for signalType in self.node.present_event_types:
                     if sortEventOutputs:
@@ -452,9 +468,7 @@ class XipppyThread(QtCore.QThread):
                 if self.node.debugging:
                     if self.num_requests > 3:
                         self.running = False
-                t_sleep = max(0., self.node.sample_interval_sec - time.perf_counter() + t_start_loop)
-                # print('sleeping for {} sec'.format(t_sleep))
-                time.sleep(t_sleep)
+                next_time += (time.perf_counter() - next_time) // interval * interval + interval
 
     def stop(self):
         with self.lock:

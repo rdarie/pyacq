@@ -2,8 +2,8 @@
 # Copyright (c) 2016, French National Center for Scientific Research (CNRS)
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
-from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore
 from pyqtgraph.util.mutex import Mutex
 import numpy as np
 

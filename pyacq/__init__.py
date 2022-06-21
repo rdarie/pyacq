@@ -8,6 +8,9 @@ if sys.platform == 'win32':
     winmm = ctypes.WinDLL('winmm')
     winmm.timeBeginPeriod(1)
 
+import pyqtgraph
+pyqtgraph.setConfigOptions(useOpenGL=True, useNumba=True)
+
 import faulthandler
 faulthandler.enable()
 
