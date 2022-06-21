@@ -302,7 +302,7 @@ class XipppyBuffer(Node):
 
 class XipppyThread(QtCore.QThread):
     """
-    Xipppy thread that continuously data.
+    Xipppy thread that samples data every sample_interval.
     """
     def __init__(self, node, parent=None):
         QtCore.QThread.__init__(self, parent=parent)
