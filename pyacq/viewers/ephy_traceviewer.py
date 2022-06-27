@@ -12,7 +12,7 @@ import pyqtgraph as pg
 import pdb
 import time
 from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamController
-from ephyviewer.datasource import AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource
+from ephyviewer.datasource import AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource, BaseEventAndEpoch, BaseSpikeSource
 from ephyviewer.tools import mkCachedBrush
 
 from ..core import (Node, WidgetNode, register_node_type,
@@ -47,6 +47,54 @@ default_by_channel_params = [
     {'name': 'visible', 'type': 'bool', 'value': True},
     ]
 
+class InputStreamEventAndEpochSource(BaseSpikeSource):
+    def __init__(self, stream):
+        BaseEventAndEpoch.__init__(self)
+        self.stream = stream
+        self._t_start = 0
+        self._t_stop = 0
+        channel_names = None
+        if 'channel_info' in stream.params:
+            channel_names = []
+            for chan_idx, chan_info in enumerate(stream.params['channel_info']):
+                if 'name' in chan_info:
+                    channel_names.append(chan_info['name'])
+                else:
+                    channel_names.append('{}_{}'.format(stream.name, chan_idx))
+        self.channel_names = channel_names
+
+    @property
+    def nb_channel(self):
+        return self.stream.params['nb_channel']
+        
+    @property
+    def t_start(self):
+        return self._t_start
+
+    @property
+    def t_stop(self):
+        return self._t_stop
+
+    def get_channel_name(self, chan=0):
+        return self.channel_names[chan]
+
+    def get_size(self, chan=0):
+        return
+
+    def get_chunk(self, chan=0,  i_start=None, i_stop=None):
+        sig_chunk = self.stream.buffer.get_data(i_start, i_stop, copy=True, join=True)
+        chanMask = sig_chunk['channel'] == chan
+        ev_times = sig_chunk['timestamp'][chanMask] / 3e4
+        return ev_times
+
+    def get_chunk_by_time(self, chan=0,  t_start=None, t_stop=None):
+        first, last = self.stream.buffer.first_index(), self.stream.buffer.index()
+        sig_chunk = self.stream.buffer.get_data(first, last, copy=True, join=True)
+        all_times = sig_chunk['timestamp'] / 3e4
+        chanMask = (sig_chunk['channel'] == chan)
+        timeMask = (all_times > t_start) & (all_times < t_stop)
+        ev_times = all_times[chanMask & timeMask]
+        return ev_times
 
 class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
     def __init__(self, stream):
@@ -495,6 +543,7 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self.params_controller.compute_rescale()
     
     def _refresh(self):
+        self.is_running.set()
         #~ print('TraceViewer.refresh', 't', self.t)
         xsize = self.params['xsize']
         xratio = self.params['xratio']
@@ -539,6 +588,7 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
                 t_max)
             self.parentViewer.navigation_toolbar.set_start_stop(
                 nav_t_start, nav_t_stop, seek=False)
+        self.is_running.clear()
         return
 
     def _on_new_data(self, pos, data):
@@ -788,7 +838,7 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         # timer
         # self.timer = QT.QTimer(singleShot=False, interval=100)
         # self.timer.timeout.connect(self.refresh)
-        self.timer = RefreshTimer(interval=100e-3, function=self.refresh)
+        self.timer = RefreshTimer(interval=100e-3, function=self.refresh, parent=self)
 
     def _start(self):
         self.estimate_decimate()
@@ -873,23 +923,25 @@ class RefreshTimer(Timer):
     def __init__(
             self,
             interval=100e-3, function=None,
-            verbose=False,):
+            verbose=False, parent=None):
         self.verbose = verbose
         self.lock = Lock()
+        self.parent = parent
         Timer.__init__(self, interval, function)
     
     def run(self):
         with self.lock:
             interval = self.interval
-        next_time = time.time() + interval
+        next_time = time.perf_counter() + interval
         while not self.finished.is_set():
-            # print('Sleeping for {:.3f} sec'.format(max(0, next_time - time.time())))
-            self.finished.wait(max(0, next_time - time.time()))
-            self.function()
-            # skip tasks if we are behind schedule:
+            # print('Traceviewer RefreshTimer: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
+            self.finished.wait(max(0, next_time - time.perf_counter()))
+            if not self.parent.is_running.is_set():
+                self.function()
             with self.lock:
                 interval = self.interval
-            next_time += (time.time() - next_time) // interval * interval + interval
+            # skip tasks if we are behind schedule:
+            next_time += (time.perf_counter() - next_time) // interval * interval + interval
 
     def set_interval(self, interval):
         with self.lock:

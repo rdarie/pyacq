@@ -15,6 +15,11 @@ class StreamMonitor(Node):
         pass
 
     def _initialize(self):
+        # set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None)
+        bufferParams = {key: self.inputs['signals'].params[key] for key in ['double', 'axisorder', 'fill']}
+        bufferParams['size'] = self.inputs['signals'].params['buffer_size']
+        bufferParams['shmem'] = True if (self.inputs['signals'].params['transfermode'] == 'sharedmemory') else None
+        self.inputs['signals'].set_buffer(**bufferParams)
         # There are many ways to poll for data from the input stream. In this
         # case, we will use a background thread to monitor the stream and emit
         # a Qt signal whenever data is available.
@@ -25,6 +30,7 @@ class StreamMonitor(Node):
         self.poller.start()
         
     def data_received(self, ptr, data):
-        print("Data received: %d %s %s" % (ptr, data.shape, data.dtype))
+        # print("Data received: %d %s" % (ptr, data.shape))
+        pass
 
 register_node_type(StreamMonitor)

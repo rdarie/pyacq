@@ -12,6 +12,7 @@ from ..core import Node, register_node_type
 from pyqtgraph.Qt import QtCore # , QtGui
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
+from datetime import datetime as dt
 
 ripple_analogsignal_types = ['raw', 'hi-res', 'hifreq', 'lfp']
 ripple_event_types = ['stim'] # 'macro' does not have 'spk' type
@@ -21,6 +22,8 @@ _dtype_segmentDataPacket = [
     ('timestamp', 'int', (1,)), ('channel', 'int', (1,)),
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
 #
+_xp_spk = xp.SegmentDataPacket()
+ripple_event_filler = np.array([(_xp_spk.timestamp, 0, np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
 _dtype_analogsignal  = [
     ('timestamp', 'int'), ('value', 'float64')]
 ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
@@ -70,12 +73,11 @@ def randomSineGenerator(
         t = t_start + np.arange(npoints) / sr
         sineWave = sineAmp * np.sin(2 * np.pi * centerFreq * t)[:, None]
         #
-        data = (noiseWave + sineWave).astype('float32').reshape(1, -1, order='F')
+        data = (noiseWave + sineWave).astype('float64').reshape(-1, order='F')
         # print('randomSine: data.shape = {}'.format(data.shape))
         timestamp = start_timestamp
         return data, timestamp
     return dummyRandomSine
-
 
 def randomChirpGenerator(
         startFreq=10, stopFreq=40, freqPeriod=2.,
@@ -90,13 +92,29 @@ def randomChirpGenerator(
         t_start = start_timestamp / 3e4
         t = t_start + np.arange(npoints) / sr
         t_adj = (1. + signal.sawtooth(2 * np.pi * t / freqPeriod)) * freqPeriod / 2
-        # pdb.set_trace()
         sineWave = sineAmp * np.asarray(signal.chirp(t_adj, startFreq, freqPeriod, stopFreq))[:, None]
-        data = (noiseWave + sineWave).astype('float32').reshape(1, -1, order='F')
+        data = (noiseWave + sineWave).astype('float32').reshape(-1, order='F')
         # print('RandomChirp: data.shape = {}'.format(data.shape))
         timestamp = start_timestamp
         return data, timestamp
     return dummyRandomChirp
+
+rng = np.random.default_rng(12345)
+
+def dummySpk(t_start, t_stop, max_spk):
+    t_interval = t_stop - t_start
+    spkFreq = 30 # Hz
+    count = np.round((spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
+    timestamps = rng.random((count,))
+    timestamps /= timestamps.sum()
+    timestamps = np.floor(timestamps.cumsum() * t_interval)
+    # timestamps = np.linspace(0, t_interval * (1 - rng.random() / 10.), count)
+    data = []
+    for dt in timestamps:
+        spk = xp.SegmentDataPacket()
+        spk.timestamp = t_stop - dt
+        data.append(spk)
+    return count, data
 
 class DummyXipppy():
 
@@ -105,27 +123,31 @@ class DummyXipppy():
         'hi-res': [eNum for eNum in range(1, 65)],
         'hifreq': [eNum for eNum in range(1, 65)],
         'lfp': [],
+        'stim': [eNum for eNum in range(1, 65)],
         }
 
     def __init__(
             self,
             raw_fun=None, hires_fun=None, 
             hifreq_fun=None, lfp_fun=None,
+            stim_spk_fun=None,
             signal_type_lookup=None):
+        self.t_zero = dt.timestamp(dt.strptime(dt.now().strftime("%Y%m%d%H"), "%Y%m%d%H"))
+        #
         if raw_fun is None:
             self.raw_fun = randomSineGenerator(
                 centerFreq=40, sr=ripple_sample_rates['raw'],
                 noiseStd=0.05, sineAmp=1.)
         else:
             self.raw_fun = raw_fun
-
+        #
         if hires_fun is None:
             self.hires_fun = randomSineGenerator(
                 centerFreq=40, sr=ripple_sample_rates['hi-res'],
                 noiseStd=0.05, sineAmp=1.)
         else:
             self.hires_fun = hires_fun
-
+        #
         if hifreq_fun is None:
             self.hifreq_fun = randomChirpGenerator(
                 startFreq=10, stopFreq=40, freqPeriod=2.,
@@ -139,6 +161,14 @@ class DummyXipppy():
                 noiseStd=0.05, sineAmp=1.)
         else:
             self.lfp_fun = lfp_fun
+        
+        _t_now = self.time()
+        self.last_stim_spk_t = {ch: _t_now for ch in self.list_elec()}
+
+        if stim_spk_fun is None:
+            self.stim_spk_fun = dummySpk
+        else:
+            self.stim_spk_fun = stim_spk_fun
         #
         self.signal_type_lookup = deepcopy(
             self.default_signal_type_lookup)
@@ -151,14 +181,14 @@ class DummyXipppy():
     def signal(self, chanNum, signalType):
         return chanNum in self.signal_type_lookup[signalType]
 
-    def list_elec(self, feType):
-        return [eNum for eNum in range(1, 257)]
+    def list_elec(self, feType=None):
+        return [eNum for eNum in range(1, 65)]
 
     def _close(self):
         return
 
     def time(self):
-        t = int((time.time() - 1655100000.) * 3e4)
+        t = int((time.time() - self.t_zero) * 3e4)
         return t
 
     def cont_raw(self, npoints, elecs, start_timestamp):
@@ -173,6 +203,11 @@ class DummyXipppy():
     def cont_lfp(self, npoints, elecs, start_timestamp):
         return self.lfp_fun(npoints, elecs, start_timestamp)
 
+    def stim_data(self, elecs, max_spk):
+        t_now = self.time()
+        count, data = self.stim_spk_fun(self.last_stim_spk_t[elecs], t_now, max_spk)
+        self.last_stim_spk_t[elecs] = t_now
+        return count, data
 
 class XipppyBuffer(Node):
     """
@@ -196,10 +231,11 @@ class XipppyBuffer(Node):
             'sample_rate': ripple_sample_rates['lfp'],
             'compression': '', 'fill': ripple_analogsignal_filler},
         'stim': {
-            'streamtype': 'event', 'shape': (-1,), 'dtype': _dtype_segmentDataPacket},
+            'streamtype': 'event', 'shape': (-1,),
+            'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
-        }
+            }
 
     def __init__(self, dummy=False, dummy_kwargs=dict(), **kargs):
         Node.__init__(self, **kargs)
@@ -211,7 +247,7 @@ class XipppyBuffer(Node):
                 'hi-res': self.xp.cont_hires,
                 'hifreq': self.xp.cont_hifreq,
                 'lfp': self.xp.cont_lfp,
-                'spk': self.xp.spk_data,
+                # 'spk': self.xp.spk_data,
                 'stim': self.xp.stim_data,
                 }
         else:
@@ -366,7 +402,7 @@ class XipppyThread(QtCore.QThread):
                 with self.lock:
                     if not self.running:
                         break
-                # print('sleeping for {} sec'.format(max(0, next_time - time.perf_counter())))
+                # print('XipppyThread: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
                 time.sleep(max(0, next_time - time.perf_counter()))
                 # get current nip time
                 self.head = self.node.xp.time()
