@@ -11,6 +11,8 @@ from ephyviewer.myqt import QT
 import pyqtgraph as pg
 import pdb
 import time
+import atexit
+import weakref
 from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamController
 from ephyviewer.datasource import AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource, BaseEventAndEpoch, BaseSpikeSource
 from ephyviewer.tools import mkCachedBrush
@@ -46,6 +48,7 @@ default_by_channel_params = [
     {'name': 'offset', 'type': 'float', 'value': 0., 'step': 0.1},
     {'name': 'visible', 'type': 'bool', 'value': True},
     ]
+
 
 class InputStreamEventAndEpochSource(BaseSpikeSource):
     def __init__(self, stream):
@@ -95,6 +98,7 @@ class InputStreamEventAndEpochSource(BaseSpikeSource):
         timeMask = (all_times > t_start) & (all_times < t_stop)
         ev_times = all_times[chanMask & timeMask]
         return ev_times
+
 
 class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
     def __init__(self, stream):
@@ -428,9 +432,6 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self._max_point = 3000
         self.last_t_min = None
 
-    # def seek(self, t):
-    #     self.t = t
-
     def initialize_plot(self):
         self.vline = pg.InfiniteLine(angle = 90, movable = False, pen = self.params['vline_color'])
         self.vline.setZValue(1) # ensure vline is above plot elements
@@ -543,7 +544,8 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self.params_controller.compute_rescale()
     
     def _refresh(self):
-        self.is_running.set()
+        # with self.lock:
+        #     self.is_refreshing = True
         #~ print('TraceViewer.refresh', 't', self.t)
         xsize = self.params['xsize']
         xratio = self.params['xratio']
@@ -561,8 +563,9 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
             if self.parentViewer.navigation_toolbar.play_pause_status:
                 self.t = t_max - xsize * (1 - xratio)
                 self.last_t_min = t_min
-            if self.controls_parent:
-                self.time_changed.emit(self.t)
+        #
+        if self.controls_parent:
+            self.time_changed.emit(self.t)
         #
         t_start, t_stop = self.t - xsize*xratio , self.t + xsize*(1-xratio)
         #
@@ -588,7 +591,6 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
                 t_max)
             self.parentViewer.navigation_toolbar.set_start_stop(
                 nav_t_start, nav_t_stop, seek=False)
-        self.is_running.clear()
         return
 
     def _on_new_data(self, pos, data):
@@ -696,6 +698,7 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
     def on_data_ready(
             self, t, t_start, t_stop, visibles,
             dict_curves, times_curves, sigs_chunk, dict_scatter):
+        # try:
         #~ print('on_data_ready', t, t_start, t_stop)
 
         if self.t != t:
@@ -764,6 +767,9 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         self.plot.setXRange( t_start, t_stop, padding = 0.0)
         self.plot.setYRange(self.params['ylim_min'], self.params['ylim_max'], padding = 0.0)
         #~ self.graphicsview.repaint()
+        # finally:
+        #     with self.lock:
+        #         self.is_refreshing = False
         return
 
     def _check_nb_channel(self):
@@ -838,7 +844,8 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
         # timer
         # self.timer = QT.QTimer(singleShot=False, interval=100)
         # self.timer.timeout.connect(self.refresh)
-        self.timer = RefreshTimer(interval=100e-3, function=self.refresh, parent=self)
+        self.timer = RefreshTimer(interval=100e-3, node=self)
+        self.timer.timeout.connect(self.refresh)
 
     def _start(self):
         self.estimate_decimate()
@@ -849,7 +856,8 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
     def _stop(self):
         self.poller.stop()
         self.poller.wait()
-        self.timer.cancel()
+        self.timer.stop()
+        self.timer.wait()
     
     def close(self):
         if self.running():
@@ -882,67 +890,57 @@ class TraceViewerNode(BaseMultiChannelViewer, WidgetNode):
     def estimate_decimate(self, nb_point=2000):
         xsize = self.params['xsize']
         self.params['decimate'] = max(int(xsize*self.sample_rate)//nb_point, 1)
-    
-    def check_input_specs(self):
-        """This method is called during `Node.initialize()` and may be
-        reimplemented by subclasses to ensure that inputs are correctly
-        configured before the node is started.
-        
-        In case of misconfiguration, this method must raise an exception.
-        """
-        pass
-    
-    def check_output_specs(self):
-        """This method is called during `Node.initialize()` and may be
-        reimplemented by subclasses to ensure that outputs are correctly
-        configured before the node is started.
-        
-        In case of misconfiguration, this method must raise an exception.
-        """
-        pass
-    
-    def after_input_connect(self, inputname):
-        """This method is called when one of the Node's inputs has been
-        connected.
-        """
-        pass
-    
-    def after_output_configure(self, outputname):
-        """This method is called when one of the Node's outputs has been
-        configured.
-        
-        It may be reimplemented by subclasses.
-        """
-        pass
 
 
 register_node_type(TraceViewerNode)
 
 
-class RefreshTimer(Timer):
+class RefreshTimer(QT.QThread):
+    timeout = QT.pyqtSignal()
+    
     def __init__(
             self,
-            interval=100e-3, function=None,
+            interval=100e-3, node=None,
             verbose=False, parent=None):
+        QT.QThread.__init__(self, parent)
         self.verbose = verbose
-        self.lock = Lock()
-        self.parent = parent
-        Timer.__init__(self, interval, function)
+        self.interval = interval
+        self.node = weakref.ref(node)
+        #
+        self.mutex = QT.QMutex()
+        self.lock = QT.QMutexLocker(self.mutex)
+        self.running = False
+        atexit.register(self.stop)
+        #
     
     def run(self):
         with self.lock:
+            self.running = True
             interval = self.interval
         next_time = time.perf_counter() + interval
-        while not self.finished.is_set():
-            # print('Traceviewer RefreshTimer: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
-            self.finished.wait(max(0, next_time - time.perf_counter()))
-            if not self.parent.is_running.is_set():
-                self.function()
+        while True:
+            print('Traceviewer RefreshTimer: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
+            time.sleep(max(0, next_time - time.perf_counter()))
+            # with self.node.lock:
+            #     already_refreshing = self.node.is_refreshing
+            already_refreshing = False
+            if not already_refreshing:
+                # skip if parent is already running
+                self.timeout.emit()
+            # check the interval, in case it has changed
             with self.lock:
                 interval = self.interval
+                running = self.running
+            if not running:
+                break
             # skip tasks if we are behind schedule:
             next_time += (time.perf_counter() - next_time) // interval * interval + interval
+        return
 
     def set_interval(self, interval):
         with self.lock:
             self.interval = interval
+
+    def stop(self):
+        with self.lock:
+            self.running = False
