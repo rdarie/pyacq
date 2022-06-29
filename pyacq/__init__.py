@@ -9,7 +9,7 @@ if sys.platform == 'win32':
     winmm.timeBeginPeriod(1)
 
 import pyqtgraph
-pyqtgraph.setConfigOptions(useOpenGL=True, useNumba=True)
+pyqtgraph.setConfigOptions(useOpenGL=True)
 
 import faulthandler
 faulthandler.enable()

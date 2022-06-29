@@ -28,6 +28,7 @@ _dtype_analogsignal  = [
     ('timestamp', 'int'), ('value', 'float64')]
 ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
 
+
 # _dtype_analogsignal = 'float64'
 # ripple_analogsignal_filler = np.nan
 
@@ -209,7 +210,7 @@ class DummyXipppy():
         self.last_stim_spk_t[elecs] = t_now
         return count, data
 
-class XipppyBuffer(Node):
+class XipppyTxBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
@@ -299,7 +300,7 @@ class XipppyBuffer(Node):
                 else:
                     self.channels[signalType] = []
                 if self.verbose:
-                    print('XipppyBuffer; configure(); Signal type {}'.format(signalType))
+                    print('XipppyTxBuffer; configure(); Signal type {}'.format(signalType))
                 # prune list of channels
                 if len(self.channels[signalType]):
                     # we requested a specific list
@@ -511,4 +512,4 @@ class XipppyThread(QtCore.QThread):
             self.running = False
 
 
-register_node_type(XipppyBuffer)
+register_node_type(XipppyTxBuffer)
