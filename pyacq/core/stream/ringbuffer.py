@@ -235,8 +235,9 @@ class RingBuffer:
         """
         first, last = self.first_index(), self.index()
         if start < first or stop > last:
-            raise IndexError("Requested segment (%d, %d) is out of bounds for ring buffer. "
-                             "Current bounds are (%d, %d)." % (start, stop, first, last))
+            raise IndexError(
+                "Requested segment (%d, %d) is out of bounds for ring buffer. "
+                "Current bounds are (%d, %d)." % (start, stop, first, last))
         
         bsize = self.shape[0]
         copied = False

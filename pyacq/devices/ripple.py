@@ -104,7 +104,7 @@ rng = np.random.default_rng(12345)
 
 def dummySpk(t_start, t_stop, max_spk):
     t_interval = t_stop - t_start
-    spkFreq = 30 # Hz
+    spkFreq = 15 # Hz
     count = np.round((spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
     timestamps = rng.random((count,))
     timestamps /= timestamps.sum()
@@ -118,7 +118,7 @@ def dummySpk(t_start, t_stop, max_spk):
     return count, data
 
 class DummyXipppy():
-
+    t_zero = time.time()
     default_signal_type_lookup = {
         'raw': [],
         'hi-res': [eNum for eNum in range(1, 65)],
@@ -133,7 +133,6 @@ class DummyXipppy():
             hifreq_fun=None, lfp_fun=None,
             stim_spk_fun=None,
             signal_type_lookup=None):
-        self.t_zero = dt.timestamp(dt.strptime(dt.now().strftime("%Y%m%d%H"), "%Y%m%d%H"))
         #
         if raw_fun is None:
             self.raw_fun = randomSineGenerator(
@@ -214,6 +213,7 @@ class XipppyTxBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
+    sortEventOutputs = False
     _output_specs = {
         'raw': {
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
@@ -232,7 +232,7 @@ class XipppyTxBuffer(Node):
             'sample_rate': ripple_sample_rates['lfp'],
             'compression': '', 'fill': ripple_analogsignal_filler},
         'stim': {
-            'streamtype': 'event', 'shape': (-1,),
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
             'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
@@ -350,6 +350,7 @@ class XipppyTxBuffer(Node):
     def after_output_configure(self, signalType):
         channel_info = [
             {
+                'channel_index': c,
                 'name': '{}_{}'.format(signalType, c)}
             for c in self.channels[signalType]]
         self.outputs[signalType].params['channel_info'] = channel_info
@@ -463,9 +464,8 @@ class XipppyThread(QtCore.QThread):
                             })
                     self.node.outputs[signalType].send(data_out)
                 # send stim events
-                sortEventOutputs = False
                 for signalType in self.node.present_event_types:
-                    if sortEventOutputs:
+                    if self.node.sortEventOutputs:
                         ########################################################
                         # Sort events by timestamp
                         chanNums = []
