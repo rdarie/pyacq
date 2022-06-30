@@ -9,7 +9,7 @@ import numpy as np
 #~ import matplotlib.colors
 from collections import OrderedDict
 from threading import Timer, Lock
-from ephyviewer.myqt import QT
+from ephyviewer.myqt import QT, QT_MODE
 import pyqtgraph as pg
 import pdb
 import time
@@ -19,7 +19,7 @@ import sys
 from ephyviewer.base import BaseMultiChannelViewer, Base_MultiChannel_ParamController
 from ephyviewer.datasource import AnalogSignalFromNeoRawIOSource, BaseAnalogSignalSource, BaseEventAndEpoch, BaseSpikeSource
 from ephyviewer.tools import mkCachedBrush
-from ephyviewer.mainviewer import MainViewer
+from ephyviewer.mainviewer import MainViewer, location_to_qt, orientation_to_qt
 from ephyviewer.navigation import NavigationToolBar
 
 from ..core import (Node, WidgetNode, register_node_type,
@@ -167,7 +167,7 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
             #~print(f'sig_chunk["timestamp"] = {sig_chunk["timestamp"]}')
             t_start = t / 3e4 - last_index / self.sample_rate
         self._t_start = t_start
-        print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
+        #~print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
         self._t_stop = self.signals.shape[0] / self.sample_rate + t_start
         #
         self.channel_names = []
@@ -241,9 +241,23 @@ class XipppyRxBuffer(Node):
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
             }
 
-    def __init__(self, max_xsize=1., **kargs):
+    def __init__(
+            self, max_xsize=1.,
+            requested_signal_types=None,
+            **kargs):
         self.max_xsize = max_xsize
-        #
+        if requested_signal_types is None:
+            self.requested_signal_types = ripple_signal_types
+        else:
+            self.requested_signal_types = requested_signal_types
+        self.requested_analogsignal_types = [
+            sig_type for sig_type in self.requested_signal_types
+            if sig_type in ripple_analogsignal_types
+            ]
+        self.requested_event_types = [
+            sig_type for sig_type in self.requested_signal_types
+            if sig_type in ripple_event_types
+            ]
         self.nb_channel = {}
         self.sources = {}
         self.pollers = {}
@@ -253,13 +267,13 @@ class XipppyRxBuffer(Node):
         pass
 
     def _check_nb_channel(self):
-        for inputname in ripple_signal_types:
+        for inputname in self.requested_signal_types:
             self.nb_channel[inputname] = self.inputs[inputname].params['nb_channel']
             # print('self.nb_channel[{}] = {}'.format(inputname, self.nb_channel[inputname]))
 
     def _initialize(self):
         self._check_nb_channel()
-        for inputname in ripple_analogsignal_types:
+        for inputname in self.requested_analogsignal_types:
             if self.nb_channel[inputname] > 0:
                 sample_rate = self.inputs[inputname].params['sample_rate']
                 # set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None)
@@ -277,7 +291,7 @@ class XipppyRxBuffer(Node):
                 # a Qt signal whenever data is available.
                 self.pollers[inputname] = ThreadPollInput(self.inputs[inputname], return_data=True)
                 # self.pollers[inputname].new_data.connect(self.analogsignal_received)
-        for inputname in ripple_event_types:
+        for inputname in self.requested_event_types:
             bufferParams = {
                 key: self.inputs[inputname].params[key] for key in ['double', 'axisorder', 'fill']}
             bufferParams['size'] = self.inputs[inputname].params['buffer_size']
@@ -330,7 +344,12 @@ class NodeNavigationToolbar(NavigationToolBar):
             ):
         QT.QWidget.__init__(self, parent)
 
-        self.setSizePolicy(QT.QSizePolicy.Minimum, QT.QSizePolicy.Maximum)
+        if QT_MODE == 'PyQt6':
+            self.setSizePolicy(
+                QT.QSizePolicy.Policy.Minimum, QT.QSizePolicy.Policy.Maximum)
+        else:
+            self.setSizePolicy(
+                QT.QSizePolicy.Minimum, QT.QSizePolicy.Maximum)
 
         self.mainlayout = QT.QVBoxLayout()
         self.setLayout(self.mainlayout)
@@ -348,9 +367,11 @@ class NodeNavigationToolbar(NavigationToolBar):
 
         if show_scroll_time:
             #~ self.slider = QSlider()
-            self.scroll_time = QT.QScrollBar(orientation=QT.Horizontal, minimum=0, maximum=1000)
+            self.scroll_time = QT.QScrollBar(
+                orientation=orientation_to_qt['horizontal'],
+                minimum=0, maximum=1000)
             self.mainlayout.addWidget(self.scroll_time)
-            if not self.is_playing:
+            if not self.get_playing():
                 # do not connect this if it will play by default
                 self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
 
@@ -377,7 +398,9 @@ class NodeNavigationToolbar(NavigationToolBar):
             h.addWidget(but)
 
             #trick for separator
-            h.addWidget(QT.QFrame(frameShape=QT.QFrame.VLine, frameShadow=QT.QFrame.Sunken))
+            h.addWidget(QT.QFrame(
+                frameShape=QT.QFrame.VLine,
+                frameShadow=QT.QFrame.Sunken))
 
             # add spacebar shortcut for play/pause
             play_pause_shortcut = QT.QShortcut(self)
@@ -441,7 +464,7 @@ class NodeNavigationToolbar(NavigationToolBar):
             #trick for separator
             h.addWidget(QT.QFrame(frameShape=QT.QFrame.VLine, frameShadow=QT.QFrame.Sunken))
             # do not connect this if it will play by default
-            if not self.is_playing:
+            if not self.get_playing():
                 self.spinbox_time.valueChanged.connect(self.on_spinbox_time_changed)
 
         if show_label_datetime:
@@ -476,23 +499,23 @@ class NodeNavigationToolbar(NavigationToolBar):
     def on_play(self):
         # if play is currently disabled, we are starting it;
         # disconnect these
-        if not self.is_playing:
+        if not self.get_playing():
             self.spinbox_time.valueChanged.disconnect(self.on_spinbox_time_changed)
             self.scroll_time.valueChanged.disconnect(self.on_scroll_time_changed)
-            self.is_playing = True
+            self.set_playing(True)
             self.play_pause_signal.emit(True)
 
     def on_stop_pause(self):
         # if play is currently enabled, we are stopping it;
         # connect these
-        if self.is_playing:
+        if self.get_playing():
             self.spinbox_time.valueChanged.connect(self.on_spinbox_time_changed)
             self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
-            self.is_playing = False
+            self.set_playing(False)
             self.play_pause_signal.emit(False)
 
     def on_play_pause_shortcut(self):
-        if self.is_playing:
+        if self.get_playing():
             self.on_stop_pause()
         else:
             self.on_play()
@@ -509,15 +532,19 @@ class NodeNavigationToolbar(NavigationToolBar):
         self.time_label.setText(f'Time: {t:.3f} sec')
 
         if refresh_scroll and self.show_scroll_time:
-            self.scroll_time.blockSignals(True)
+            if not self.get_playing():
+                self.scroll_time.blockSignals(True)
             pos = int((self.t - self.t_start)/(self.t_stop - self.t_start)*1000.)
             self.scroll_time.setValue(pos)
-            self.scroll_time.blockSignals(False)
+            if not self.get_playing():
+                self.scroll_time.blockSignals(False)
             
         if refresh_spinbox and self.show_spinbox:
-            self.spinbox_time.blockSignals(True)
+            if not self.get_playing():
+                self.spinbox_time.blockSignals(True)
             self.spinbox_time.setValue(t)
-            self.spinbox_time.blockSignals(False)
+            if not self.get_playing():
+                self.spinbox_time.blockSignals(False)
 
         if self.show_label_datetime:
             dt = self.datetime0 + datetime.timedelta(seconds=self.t)
@@ -557,6 +584,7 @@ class NodeMainViewer(MainViewer):
             self.speed = speed
         else:
             self.speed = 1.
+            
         QT.QMainWindow.__init__(self, parent)
         #TODO settings
         #http://www.programcreek.com/python/example/86789/PyQt5.QtCore.QSettings
@@ -590,20 +618,19 @@ class NodeMainViewer(MainViewer):
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+        self.t_refresh = 0.
+        self.last_t_refresh = -1.
 
         self.navigation_toolbar.time_changed.connect(self.on_time_changed)
         self.navigation_toolbar.xsize_changed.connect(self.on_xsize_changed)
         # self.navigation_toolbar.auto_scale_requested.connect(self.auto_scale)
         self.navigation_toolbar.speedSpin.valueChanged.connect(self.on_change_speed)
         self.load_one_setting('navigation_toolbar', self.navigation_toolbar)
+        # self.showMaximized()
 
     def set_time_reference_source(self, source):
         self.time_reference_source = source
 
-    def seek(self, t):
-        for name, viewer in self.viewers.items():
-            viewer['widget'].seek(t)
-    
     def add_view(
         self, widget, connect_seek_time=True,
         **kwargs):
@@ -616,20 +643,25 @@ class NodeMainViewer(MainViewer):
         source = self.time_reference_source
         if source is not None:
             t_max = source.index_to_time(source.get_last_index())
-            if self.navigation_toolbar.is_playing:
-                t = t_max - self.xsize * (1 - self.xratio)
+            if self.navigation_toolbar.get_playing():
+                self.t_refresh = t_max - self.xsize * (1 - self.xratio)
             else:
-                t = self.navigation_toolbar.t
-            self.seek_time.emit(t)
-            if self.navigation_toolbar.is_playing:
-                self.navigation_toolbar.seek(t, refresh_spinbox=False, emit=False)
-            t_min = source.index_to_time(source.get_first_index())
-            nav_t_start = min(
-                self.navigation_toolbar.t_start, t_min)
-            nav_t_stop = max(
-                self.navigation_toolbar.t_stop, t_max)
-            self.navigation_toolbar.set_start_stop(
-                nav_t_start, nav_t_stop, seek=False)
+                self.t_refresh = self.navigation_toolbar.t
+            if self.t_refresh != self.last_t_refresh:
+                self.seek_time.emit(self.t_refresh)
+                #
+                if self.navigation_toolbar.get_playing():
+                    self.navigation_toolbar.seek(
+                        self.t_refresh, refresh_spinbox=False, emit=False)
+                #
+                t_min = source.index_to_time(source.get_first_index())
+                nav_t_start = min(
+                    self.navigation_toolbar.t_start, t_min)
+                nav_t_stop = max(
+                    self.navigation_toolbar.t_stop, t_max)
+                self.navigation_toolbar.set_start_stop(
+                    nav_t_start, nav_t_stop, seek=False)
+            self.last_t_refresh = self.t_refresh
 
     def on_change_speed(self, speed):
         self.speed = speed

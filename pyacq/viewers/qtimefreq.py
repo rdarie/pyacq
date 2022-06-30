@@ -237,10 +237,12 @@ class QTimeFreq(WidgetNode):
             by_chan_p = [{'name': 'label', 'type': 'str', 'value': self.channel_names[i], 'readonly':True}] + list(self._default_by_channel_params)
             all.append({'name': 'ch{}'.format(i), 'type': 'group', 'children': by_chan_p})
         self.by_channel_params = pg.parametertree.Parameter.create(name='AnalogSignals', type='group', children=all)
-        self.params = pg.parametertree.Parameter.create(name='Global options',
-                                                    type='group', children=self._default_params)
-        self.all_params = pg.parametertree.Parameter.create(name='all param',
-                                    type='group', children=[self.params,self.by_channel_params])
+        self.params = pg.parametertree.Parameter.create(
+            name='Global options',
+            type='group', children=self._default_params)
+        self.all_params = pg.parametertree.Parameter.create(
+            name='all param',
+            type='group', children=[self.params,self.by_channel_params])
         self.params.param('xsize').setLimits([16./sr, self.max_xsize*.95]) 
         self.all_params.sigTreeStateChanged.connect(self.on_param_change)
         
@@ -350,8 +352,9 @@ class QTimeFreq(WidgetNode):
         self.sub_sample_rate = self.sample_rate/self.downsample_factor
         self.plot_length = int(self.wanted_size*self.sub_sample_rate)
         
-        self.wavelet_fourrier = generate_wavelet_fourier(self.len_wavelet, tfr_params['f_start'], tfr_params['f_stop'],
-                            tfr_params['deltafreq'], self.sub_sample_rate, tfr_params['f0'], tfr_params['normalisation'])
+        self.wavelet_fourrier = generate_wavelet_fourier(
+            self.len_wavelet, tfr_params['f_start'], tfr_params['f_stop'],
+            tfr_params['deltafreq'], self.sub_sample_rate, tfr_params['f0'], tfr_params['normalisation'])
         
         if self.downsample_factor>1:
             n = 8

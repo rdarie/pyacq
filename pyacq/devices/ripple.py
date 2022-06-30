@@ -119,12 +119,14 @@ def dummySpk(t_start, t_stop, max_spk):
 
 class DummyXipppy():
     t_zero = time.time()
+    _num_elecs = 64
+
     default_signal_type_lookup = {
         'raw': [],
-        'hi-res': [eNum for eNum in range(1, 65)],
-        'hifreq': [eNum for eNum in range(1, 65)],
+        'hi-res': [eNum for eNum in range(1, _num_elecs + 1)],
+        'hifreq': [eNum for eNum in range(1, _num_elecs + 1)],
         'lfp': [],
-        'stim': [eNum for eNum in range(1, 65)],
+        'stim': [eNum for eNum in range(1, _num_elecs + 1)],
         }
 
     def __init__(
@@ -182,7 +184,7 @@ class DummyXipppy():
         return chanNum in self.signal_type_lookup[signalType]
 
     def list_elec(self, feType=None):
-        return [eNum for eNum in range(1, 65)]
+        return [eNum for eNum in range(1, self._num_elecs + 1)]
 
     def _close(self):
         return
