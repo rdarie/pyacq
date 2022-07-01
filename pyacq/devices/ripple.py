@@ -2,8 +2,14 @@
 # Copyright (c) 2016, French National Center for Scientific Research (CNRS)
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
-import pdb
-import xipppy as xp
+import pdb, traceback
+try:
+    import xipppy as xp
+    HAVE_XIPPPY = True
+except:
+    traceback.print_exc()
+    HAVE_XIPPPY = False
+    xp = None
 import numpy as np
 from scipy import signal
 import time
