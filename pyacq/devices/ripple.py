@@ -4,20 +4,20 @@
 
 import pdb, traceback
 try:
-    import xipppy as xp
+    import xipppy
     HAVE_XIPPPY = True
     ripple_dataReaderFuns = {
-        'raw': xp.cont_raw,
-        'hi-res': xp.cont_hires,
-        'hifreq': xp.cont_hifreq,
-        'lfp': xp.cont_lfp,
-        'spk': xp.spk_data,
-        'stim': xp.stim_data
+        'raw': xipppy.cont_raw,
+        'hi-res': xipppy.cont_hires,
+        'hifreq': xipppy.cont_hifreq,
+        'lfp': xipppy.cont_lfp,
+        'spk': xipppy.spk_data,
+        'stim': xipppy.stim_data
         }
-except:
+except ImportError:
     traceback.print_exc()
     HAVE_XIPPPY = False
-    xp = None
+    xipppy = None
     ripple_dataReaderFuns = {
         'raw': None,
         'hi-res': None,
@@ -156,9 +156,9 @@ def dummySpk(t_start, t_stop, max_spk):
     data = []
     for dt in timestamps:
         if HAVE_XIPPPY:
-            spk = xp.SegmentDataPacket()
+            spk = xipppy.SegmentDataPacket()
         else:
-            spk = xp.SegmentDataPacket()
+            spk = DummySegmentDataPacket()
         spk.timestamp = t_stop - dt
         data.append(spk)
     return count, data
@@ -166,6 +166,8 @@ def dummySpk(t_start, t_stop, max_spk):
 class DummyXipppy():
     t_zero = time.time()
     _num_elecs = 32
+
+    SegmentDataPacket = DummySegmentDataPacket
 
     default_signal_type_lookup = {
         'raw': [],
@@ -301,7 +303,7 @@ class XipppyTxBuffer(Node):
                 }
         else:
             self.dataReaderFuns = ripple_dataReaderFuns
-            self.xp = xp
+            self.xp = xipppy
         #
         self.verbose = False
         #
