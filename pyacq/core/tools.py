@@ -45,7 +45,8 @@ class ThreadPollInput(QtCore.QThread):
     """
     new_data = QtCore.Signal(int, object)
     
-    def __init__(self, input_stream, timeout=200, return_data=None, parent=None):
+    def __init__(
+            self, input_stream, timeout=200, return_data=None, parent=None):
         QtCore.QThread.__init__(self, parent)
         self.input_stream = weakref.ref(input_stream)
         self.timeout = timeout
@@ -279,7 +280,6 @@ class ChannelSplitter(Node):
         pass
 
 register_node_type(ChannelSplitter)
-
 
 
 class ThreadChunkResizer(ThreadPollInput):

@@ -119,7 +119,7 @@ def dummySpk(t_start, t_stop, max_spk):
 
 class DummyXipppy():
     t_zero = time.time()
-    _num_elecs = 64
+    _num_elecs = 32
 
     default_signal_type_lookup = {
         'raw': [],

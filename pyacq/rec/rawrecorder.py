@@ -7,12 +7,30 @@ import collections
 import logging
 import os
 import json
+import pdb
 
 from ..core import Node, register_node_type, ThreadPollInput, InputStream
 from pyqtgraph.Qt import QtCore, QtGui
 from pyqtgraph.util.mutex import Mutex
 
 from ..version import version as pyacq_version
+
+# extend the json.JSONEncoder class
+class CustomEncoder(json.JSONEncoder):
+    # overload method default
+    def default(self, obj):
+        # Match all the types you want to handle in your converter
+        if isinstance(obj, np.dtype):
+            try:
+                return json.JSONEncoder.default(self, obj)
+            except:
+                if len(obj.descr) == 1:
+                    return obj.name
+                else:
+                    return obj.descr
+        else:
+            # Call the default method for other types
+            return json.JSONEncoder.default(self, obj)
 
 
 class RawRecorder(Node):
@@ -129,10 +147,12 @@ class RawRecorder(Node):
     
 
 def _flush_dict(filename, d):
-        with open(filename, mode = 'w', encoding = 'utf8') as f:
-            f.write(json.dumps(d, sort_keys=True,
-                            indent=4, separators=(',', ': '), ensure_ascii=False))
-
+    # pdb.set_trace()
+    with open(filename, mode = 'w', encoding = 'utf8') as f:
+        f.write(
+            json.dumps(
+                d, sort_keys=True, cls=CustomEncoder,
+                indent=4, separators=(',', ': '), ensure_ascii=False))
 
 
 class ThreadRec(ThreadPollInput):
@@ -142,7 +162,7 @@ class ThreadRec(ThreadPollInput):
         self.name = name
         self.fid = fid
         self._start_index = None
-        self.flush_every_packet =flush_every_packet
+        self.flush_every_packet = flush_every_packet
         
     def process_data(self, pos, data):
         if self._start_index is None:

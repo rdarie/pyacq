@@ -3,8 +3,10 @@
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
 import numpy as np
-import pytest
+# import pytest
+import pdb
 from pyacq.core.stream import OutputStream, InputStream, RingBuffer
+from pyacq.core.stream.ringbuffer import RingBufferIllustrator
 
 
 def test_ringbuffer():
@@ -144,5 +146,10 @@ def test_ringbuffer_shm():
 
 
 if __name__ =='__main__':
-    test_ringbuffer()
-    test_ringbuffer_shm()
+    buf1 = RingBuffer(
+        shape=(100, 8),
+        dtype=np.float32, double=False)
+    ill = RingBufferIllustrator()
+    pdb.set_trace()
+    # test_ringbuffer()
+    # test_ringbuffer_shm()

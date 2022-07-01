@@ -222,8 +222,7 @@ class RPCClient(object):
         else:
             req_id = self.next_request_id
             self.next_request_id += 1
-        logger.info("RPC request '%s' to %s [req_id=%s]", action, 
-                    self.address.decode(), req_id)
+        logger.debug("RPC request '%s' to %s [req_id=%s]", action, self.address.decode(), req_id)
         logger.debug("    => sync=%s return=%s opts=%s", sync, return_type, opts)
         
         if opts is None:
