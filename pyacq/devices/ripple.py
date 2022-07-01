@@ -6,10 +6,26 @@ import pdb, traceback
 try:
     import xipppy as xp
     HAVE_XIPPPY = True
+    ripple_dataReaderFuns = {
+        'raw': xp.cont_raw,
+        'hi-res': xp.cont_hires,
+        'hifreq': xp.cont_hifreq,
+        'lfp': xp.cont_lfp,
+        'spk': xp.spk_data,
+        'stim': xp.stim_data
+        }
 except:
     traceback.print_exc()
     HAVE_XIPPPY = False
     xp = None
+    ripple_dataReaderFuns = {
+        'raw': None,
+        'hi-res': None,
+        'hifreq': None,
+        'lfp': None,
+        'spk': None,
+        'stim': None
+        }
 import numpy as np
 from scipy import signal
 import time
@@ -20,6 +36,35 @@ from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
 from datetime import datetime as dt
 
+import array
+import ctypes
+import itertools
+
+# Helper types
+class DummySegmentDataPacket:
+    """
+    Data type to mirror classic "Segments" for spike data
+    """
+
+    def __init__(self):
+        self.timestamp = 0
+        self.class_id = 0
+        self.wf = array.array('h', itertools.repeat(0, 52))
+
+
+class DummySegmentEventPacket:
+    """
+    Data type to mirror classic "Segments" for digital data
+    """
+    def __init__(self):
+        self.timestamp = 0
+        self.reason = 0
+        self.parallel = 0
+        self.sma1 = 0
+        self.sma2 = 0
+        self.sma3 = 0
+        self.sma4 = 0
+
 ripple_analogsignal_types = ['raw', 'hi-res', 'hifreq', 'lfp']
 ripple_event_types = ['stim'] # 'macro' does not have 'spk' type
 ripple_signal_types = ripple_analogsignal_types + ripple_event_types
@@ -28,7 +73,7 @@ _dtype_segmentDataPacket = [
     ('timestamp', 'int', (1,)), ('channel', 'int', (1,)),
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
 #
-_xp_spk = xp.SegmentDataPacket()
+_xp_spk = DummySegmentDataPacket()
 ripple_event_filler = np.array([(_xp_spk.timestamp, 0, np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
 _dtype_analogsignal  = [
     ('timestamp', 'int'), ('value', 'float64')]
@@ -38,14 +83,6 @@ ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
 # _dtype_analogsignal = 'float64'
 # ripple_analogsignal_filler = np.nan
 
-ripple_dataReaderFuns = {
-    'raw': xp.cont_raw,
-    'hi-res': xp.cont_hires,
-    'hifreq': xp.cont_hifreq,
-    'lfp': xp.cont_lfp,
-    'spk': xp.spk_data,
-    'stim': xp.stim_data
-    }
 
 ripple_sample_rates = {
     'raw': int(30e3),
@@ -118,7 +155,10 @@ def dummySpk(t_start, t_stop, max_spk):
     # timestamps = np.linspace(0, t_interval * (1 - rng.random() / 10.), count)
     data = []
     for dt in timestamps:
-        spk = xp.SegmentDataPacket()
+        if HAVE_XIPPPY:
+            spk = xp.SegmentDataPacket()
+        else:
+            spk = xp.SegmentDataPacket()
         spk.timestamp = t_stop - dt
         data.append(spk)
     return count, data
