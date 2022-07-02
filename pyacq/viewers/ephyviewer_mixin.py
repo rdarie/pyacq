@@ -12,6 +12,7 @@ from threading import Timer, Lock
 from ephyviewer.myqt import QT, QT_MODE
 import pyqtgraph as pg
 import pdb
+import logging
 import time
 import atexit
 import weakref
@@ -24,16 +25,27 @@ from ephyviewer.navigation import NavigationToolBar
 
 from ..core import (Node, WidgetNode, register_node_type,
         ThreadPollInput, RingBuffer)
-from ..devices.ripple import ripple_analogsignal_types, ripple_event_types, ripple_signal_types, ripple_sample_rates, _dtype_analogsignal, _dtype_segmentDataPacket
+from ..devices.ripple import (
+    ripple_nip_sample_periods, ripple_analogsignal_filler, sortEventOutputs,
+    ripple_analogsignal_types, ripple_event_types, ripple_signal_types, ripple_sample_rates,
+    _dtype_analogsignal, _dtype_segmentDataPacket, ripple_event_filler)
 
-class InputStreamEventAndEpochSource(BaseSpikeSource):
+LOGGING = True
+logger = logging.getLogger(__name__)
+
+class InputStreamEventAndEpochSource(
+        BaseSpikeSource, Node):
+    
+    _input_specs = {'in': {'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,}}
+    _output_specs = {'out': {'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,}}
+
     def __init__(
-        self, stream,
-        get_with_copy=False, get_with_join=True,
-        return_type='spikes'
-        ):
+            self,
+            get_with_copy=False, get_with_join=True,
+            return_type='spikes', **kargs
+            ):
         BaseEventAndEpoch.__init__(self)
-        self.stream = stream
+        Node.__init__(self, **kargs)
         self._t_start = 0
         self._t_stop = 0
         #
@@ -103,9 +115,19 @@ class InputStreamEventAndEpochSource(BaseSpikeSource):
     def get_chunk(self, chan=0, i_start=None, i_stop=None):
         chanIdx = self.channel_indexes[chan]
         this_buffer = self.buffers_by_channel[chanIdx]
+        '''
+        start, stop = (
+            this_buffer._interpret_index(i_start),
+            this_buffer._interpret_index(i_stop))
+            '''
+        if LOGGING:
+            logger.info(
+                f"source {self.stream.name}: buffer[{hex(id(this_buffer))}].get_data()"
+                )
         sig_chunk = this_buffer.get_data(
             i_start, i_stop,
             copy=self.get_with_copy, join=self.get_with_join)
+        #
         ev_times = sig_chunk['timestamp'] / 3e4
         if self.return_type == 'spikes':
             return ev_times
@@ -122,7 +144,19 @@ class InputStreamEventAndEpochSource(BaseSpikeSource):
         chanIdx = self.channel_indexes[chan]
         this_buffer = self.buffers_by_channel[chanIdx]
         # print(f'this_buffer.buffer.shape = {this_buffer.buffer.shape}')
-        all_times = this_buffer.buffer['timestamp'] / 3e4
+        '''
+        start, stop = (
+            this_buffer._interpret_index(this_buffer.first_index()),
+            this_buffer._interpret_index(this_buffer.index()))
+            '''
+        if LOGGING:
+            logger.info(
+                f"source {self.stream.name}: buffer[{hex(id(this_buffer))}].get_data()"
+                )
+        sig_chunk = this_buffer.get_data(
+            this_buffer.first_index(), this_buffer.index(),
+            copy=self.get_with_copy, join=self.get_with_join)
+        all_times = sig_chunk['timestamp'] / 3e4
         # print(all_times)
         timeMask = (all_times >= t_start) & (all_times < t_stop)
         ev_times = all_times[timeMask]
@@ -155,20 +189,9 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
         self.sample_rate = float(stream.params['sample_rate'])
         self.reference_signal = None
         #
-        self.is_t_start_adjusted = False
-        t_start = 0.
-        if 't_start' in stream.params:
-            t_start = float(stream.params['t_start'])
-        elif self.has_custom_dtype:
-            last_index = self.signals.index()
-            sig_chunk = self.signals.get_data(
-                last_index - 10, last_index, copy=True, join=True)
-            t = sig_chunk["timestamp"][-1, -1]
-            #~print(f'sig_chunk["timestamp"] = {sig_chunk["timestamp"]}')
-            t_start = t / 3e4 - last_index / self.sample_rate
-        self._t_start = t_start
-        #~print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
-        self._t_stop = self.signals.shape[0] / self.sample_rate + t_start
+        self._t_start = 0.
+        #~
+        self._t_stop = self.signals.shape[0] / self.sample_rate + self._t_start
         #
         self.channel_names = []
         self.channel_indexes = []
@@ -203,7 +226,17 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource):
         return self.signals.shape[0]
 
     def get_chunk(self, i_start=None, i_stop=None):
-        sig_chunk = self.signals.get_data(
+        # print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
+        '''
+        start, stop = (
+            self.signals._interpret_index(i_start),
+            self.signals._interpret_index(i_stop))
+            '''
+        if LOGGING:
+            logger.info(
+                f"{self.stream.name}.buf[{id(self.stream.buffer):X}].get_data()"
+                )
+        sig_chunk = self.stream.get_data(
             i_start, i_stop,
             copy=self.get_with_copy, join=self.get_with_join)
         if self.has_custom_dtype:
@@ -217,29 +250,36 @@ class XipppyRxBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
-    _input_specs = {
-        'raw': {
+    _output_specs = {
+        signalType: {
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['raw'],
-            },
-        'hi-res': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['hi-res'],
-            },
-        'hifreq': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['hifreq'],
-            },
-        'lfp': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['lfp'],
-            },
+            'sample_rate': ripple_sample_rates[signalType],
+            'nip_sample_period': ripple_nip_sample_periods[signalType],
+            'compression': '', 'fill': ripple_analogsignal_filler}
+        for signalType in ripple_analogsignal_types
+        }
+    _output_specs.update({
         'stim': {
-            'streamtype': 'event', 'shape': (-1,),
-            'dtype': _dtype_segmentDataPacket},
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
+            'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
-            }
+            })
+    _input_specs = {
+        signalType: {
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
+            'sample_rate': ripple_sample_rates[signalType],
+            'nip_sample_period': ripple_nip_sample_periods[signalType],
+            'fill': ripple_analogsignal_filler}
+        for signalType in ripple_analogsignal_types
+        }
+    _input_specs.update({
+        'stim': {
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
+            'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
+        # 'spk': {
+        #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
+            })
 
     def __init__(
             self, max_xsize=1.,
@@ -578,7 +618,12 @@ class NodeMainViewer(MainViewer):
         global_xsize_zoom=False, navigation_params={}):
         self.node = node
         #
-        self.time_reference_source = time_reference_source
+        self.time_reference_source = None
+        self.source_sample_rate = None
+        self.source_buffer_dur = None
+        self.t_head = None
+        if time_reference_source is not None:
+            self.set_time_reference_source(time_reference_source)
         #
         if speed is not None:
             self.speed = speed
@@ -618,8 +663,10 @@ class NodeMainViewer(MainViewer):
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+
         self.t_refresh = 0.
         self.last_t_refresh = -1.
+
 
         self.navigation_toolbar.time_changed.connect(self.on_time_changed)
         self.navigation_toolbar.xsize_changed.connect(self.on_xsize_changed)
@@ -628,7 +675,17 @@ class NodeMainViewer(MainViewer):
         self.load_one_setting('navigation_toolbar', self.navigation_toolbar)
         # self.showMaximized()
 
+    def update_t_head(self, ptr, data):
+        self.t_head = ptr / self.source_sample_rate
+        return
+
     def set_time_reference_source(self, source):
+        # pdb.set_trace()
+        stream_name = source.stream.name
+        self.source_sample_rate = source.sample_rate
+        self.source_buffer_dur = source.signals.shape[0] / source.sample_rate
+        poller = self.node.pollers[stream_name]
+        poller.new_data.connect(self.update_t_head)
         self.time_reference_source = source
 
     def add_view(
@@ -640,9 +697,8 @@ class NodeMainViewer(MainViewer):
         return
         
     def refresh(self):
-        source = self.time_reference_source
-        if source is not None:
-            t_max = source.index_to_time(source.get_last_index())
+        if self.t_head is not None:
+            t_max = self.t_head
             if self.navigation_toolbar.get_playing():
                 self.t_refresh = t_max - self.xsize * (1 - self.xratio)
             else:
@@ -654,11 +710,12 @@ class NodeMainViewer(MainViewer):
                     self.navigation_toolbar.seek(
                         self.t_refresh, refresh_spinbox=False, emit=False)
                 #
-                t_min = source.index_to_time(source.get_first_index())
                 nav_t_start = min(
-                    self.navigation_toolbar.t_start, t_min)
+                    self.navigation_toolbar.t_start,
+                    t_max - self.source_buffer_dur)
                 nav_t_stop = max(
-                    self.navigation_toolbar.t_stop, t_max)
+                    self.navigation_toolbar.t_stop,
+                    t_max)
                 self.navigation_toolbar.set_start_stop(
                     nav_t_start, nav_t_stop, seek=False)
             self.last_t_refresh = self.t_refresh

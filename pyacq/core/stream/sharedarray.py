@@ -36,10 +36,13 @@ class SharedMem:
         if verbose:
             print('class SharedMem: nbytes = {}; id = {}'.format(self.nbytes, self))
         if shm_id is None:
-            self.shm_id = u'pyacq_SharedMem_'+''.join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(32))
+            self.shm = shared_memory.SharedMemory(
+                # name=self.shm_id,
+                create=True, size=self.shm_size)
+            # self.shm_id = u'pyacq_shm_'+''.join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(16))
+            self.shm_id = self.shm.name
             if verbose:
-                print('class SharedMem: writing; pid = {}; shm_size = {}\t\nshm_id = {}'.format(self.pid, self.shm_size, self.shm_id))
-            self.shm = shared_memory.SharedMemory(name=self.shm_id, create=True, size=self.shm_size)
+                print('class SharedMem: writing; pid = {}; shm_size = {}\t\nshm_id = {}'.format(self.pid, self.shm_size, self.shm_id))       
         else:
             if verbose:
                 print('class SharedMem: reading; pid = {}; shm_size = {}\t\nshm_id = {}'.format(self.pid, self.shm_size, self.shm_id))

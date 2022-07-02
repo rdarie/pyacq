@@ -3,140 +3,11 @@
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
 import numpy as np
-import pdb
+
 from .sharedarray import SharedMem, SharedArray
 from .arraytools import make_dtype
-import logging
+
 import warnings
-
-logger = logging.getLogger(__name__)
-verbose = False
-
-LOGGING = True
-
-def check_bounds_slice(
-        start, stop,
-        minimum_index, maximum_index,
-        raise_errors
-        ):
-    # Bounds check.
-    # Perhaps we could clip the returned data like lists/arrays do,
-    # but in this case the feedback is likely to be useful to the user.
-    err_message = (
-        f"Requested segment ({start}, {stop}) is out of bounds for ring buffer. " +
-        f"Current bounds are [{minimum_index}:{maximum_index}].")
-    if (start >= maximum_index) or (start < minimum_index):
-        if raise_errors:
-            raise IndexError(err_message)
-        else:
-            warnings.warn(err_message)
-            # clip it
-            if start >= maximum_index:
-                start = maximum_index - 1
-            elif start < minimum_index:
-                start = minimum_index
-    if (stop > maximum_index) or (stop <= minimum_index):
-        if raise_errors:
-            raise IndexError(err_message)
-        else:
-            warnings.warn(err_message)
-            # clip it
-            if stop > maximum_index:
-                stop = maximum_index
-            elif stop <= minimum_index:
-                stop = minimum_index + 1
-    return start, stop
-
-
-class RingBufferIllustrator:
-
-    def __init__(self):
-        # Note: read_index and write_index are defined independently to avoid
-    # race condifions with processes reading and writing from the same
-    # shared memory simultaneously. When new data arrives:
-    #   1. write_index is increased to indicate that the buffer has advanced
-    #      and some old data is no longer valid
-    #   2. new data is written over the old buffer data
-    #   3. read_index is increased to indicate that the new data is now
-    #      readable
-    #
-    #
-    #              write_index-bsize     break_index      read_index       write_index
-    #              |                     |                |                |
-    #    ..........[.....................|...............][...............]
-    #                                    |
-    #              [           readable area             ][ writable area ]
-    #                                    |
-    #                                    |  [........]           read without copy
-    #                        [........]  |                       read without copy
-    #                               [....|......]                read with copy
-    # 
-        pass
-
-    def word(
-            self, start="", end="", filler=" ", outer_s=20): 
-        '''
-        format_spec     ::=  [[fill]align][sign][#][0][width][grouping_option][.precision][type]
-        fill            ::=  <any character>
-        align           ::=  "<" | ">" | "=" | "^"
-        sign            ::=  "+" | "-" | " "
-        width           ::=  digit+
-        grouping_option ::=  "_" | ","
-        precision       ::=  digit+
-        type            ::=  "b" | "c" | "d" | "e" | "E" | "f" | "F" | "g" | "G" | "n" | "o" | "s" | "x" | "X" | "%"
-        '''
-        adj_space = max(0, outer_s-len(end))
-        return f"{start:{filler}<{adj_space}}{end}"
-
-    def one_line(
-        self, word_list):
-        return ''.join(self.word(*ite) for ite in word_list)
-
-    def buffer_header(self):
-        vs = "|"
-        fmt_a = lambda x: f"{vs} {x}"
-        all_text = [
-            [      ("[", "readable",),          (" area", "]"),          ("[  writable area", "]",), (" ",)],
-            [      (" ",),                      (" ",),                  (" ",),                     (" ",)],
-            [(fmt_a("write_i - bsize"),), (fmt_a("break_i"),),    (fmt_a("read_i"),),          (fmt_a("write_i"),)],
-            [       (vs,),                       (vs,),                  (vs,),                       (vs,)],
-            [      ("[ ", "", "."),              (vs, " ]", "."),       ("[ ", " ]", "."),            (vs,)],
-            ]
-        return [self.one_line(tl) for tl in all_text]
-
-    def buffer_body(
-            self, write_i=0, bsize=2, break_i=0, read_i=0,
-            ins=10):
-        fill = ' '
-        fmt_b = lambda x: f"| {x:{fill}> {ins}}"
-        all_text = [
-            [ (fmt_b(write_i - bsize),),    (fmt_b(break_i),),     (fmt_b(read_i),),          (fmt_b(write_i),)],
-        ]
-        return [self.one_line(tl) for tl in all_text]
-
-    def buffer_read(
-        self, start=0, stop=1,
-        write_i=0, bsize=2, break_i=0, read_i=0,
-        ins=10
-        ):
-        vs = "|"
-        w1 = dict(start="", end="", filler=" ", outer_s=20)
-        w2 = dict(start="[", end="]", filler=".", outer_s=20)
-        if (start < break_i) and (stop <= break_i):
-            all_text = [
-                [      ("[ ", "", "."),              (vs,),       ("  ",),            (" ",)],
-            ]
-        elif (start < break_i) and (stop > break_i):
-            all_text = [
-                [      ("[ ", "", "."),              (vs, " ]", "."),       ("[ ", " ]", "."),            (vs,)],
-            ]
-        else:
-            all_text = [
-                [      ("[ ", "", "."),              (vs, " ]", "."),       ("[ ", " ]", "."),            (vs,)],
-            ]
-        # print('\n' + '\n'.join(buffer_header() + buffer_body(write_i=30, bsize=50, break_i=4, read_i=20)))
-        return [self.one_line(tl) for tl in all_text]
-
 
 class RingBuffer:
     """Class that collects data as it arrives from an InputStream and writes it
@@ -148,15 +19,15 @@ class RingBuffer:
     footprint.
     """
     def __init__(
-            self, shape, dtype,
-            double=True, shmem=None,
-            fill=None, axisorder=None,
+            self, shape, dtype, double=True,
+            shmem=None, fill=None, axisorder=None,
             raise_errors=False):
+        
         self.double = double
         self.shape = shape
         self.raise_errors = raise_errors
+
         dtype = make_dtype(dtype) # fix dtype serialization
-        
         # order of axes as written in memory. This does not affect the shape of the 
         # buffer as seen by the user, but can be used to make sure a specific axis
         # is contiguous in memory.
@@ -166,10 +37,7 @@ class RingBuffer:
         
         shape = (shape[0] * (2 if double else 1),) + shape[1:]
         nativeshape = np.array(shape)[self.axisorder]
-        if verbose:
-            print('class RingBuffer: shape = {}; nativeshape = {}'.format(shape, nativeshape))
-        if LOGGING:
-            logger.info(f'RingBuffer {hex(id(self))}: shape = {shape}; nativeshape = {nativeshape}')
+        
         # initialize int buffers with 0 and float buffers with nan
         if fill is None:
             fill = 0 if make_dtype(dtype).kind in 'ui' else np.nan
@@ -182,7 +50,7 @@ class RingBuffer:
             self._shmem = None
             self.shm_id = None
         else:
-            size = int(np.product(shape) * make_dtype(dtype).itemsize + 16)
+            size = np.product(shape) * make_dtype(dtype).itemsize + 16
             if shmem is True:
                 # create new shared memory buffer
                 self._shmem = SharedMem(nbytes=size)
@@ -196,13 +64,14 @@ class RingBuffer:
         self.dtype = self.buffer.dtype
         
         if shmem in (None, True):
-            # Index of last *writable* sample + 1. This value is used to determine which
+            # Index of last writable sample + 1. This value is used to determine which
             # buffer indices map to which data indices (where buffer indices wrap
             # around to 0, but data indices always increase as data arrives).
             self._set_write_index(0)
-            # Index of last *written* sample + 1. This is used to determine how much of
+            # Index of last written sample + 1. This is used to determine how much of
             # the buffer is *valid* for reading.
             self._set_read_index(0)
+        
         # Note: read_index and write_index are defined independently to avoid
         # race condifions with processes reading and writing from the same
         # shared memory simultaneously. When new data arrives:
@@ -211,7 +80,7 @@ class RingBuffer:
         #   2. new data is written over the old buffer data
         #   3. read_index is increased to indicate that the new data is now
         #      readable
-        #
+
         #
         #              write_index-bsize     break_index      read_index       write_index
         #              |                     |                |                |
@@ -228,7 +97,7 @@ class RingBuffer:
         return self._read_index
 
     def first_index(self):
-        return self._read_index - self.shape[0]
+        return self._write_index - self.shape[0]
 
     @property
     def _write_index(self):
@@ -255,15 +124,17 @@ class RingBuffer:
         bsize = self.shape[0]
         if dsize > bsize:
             raise ValueError(
-                f"Data chunk size {dsize} is too large for ring "
-                "buffer of size {bsize}.")
+            "Data chunk size %d is too large for ring "
+            "buffer of size %d." % (dsize, bsize))
         if data.dtype != self.dtype:
             raise TypeError(
                 "Data has incorrect dtype %s (buffer requires %s)" %
                 (data.dtype, self.dtype))
+        
         # by default, index advances by the size of the chunk
         if index is None:
             index = self._write_index + dsize
+        
         assert dsize <= index - self._write_index, (
             "Data size is %d, but index "
             "only advanced by %d. (index=%d, self._write_index=%d)" % 
@@ -283,7 +154,7 @@ class RingBuffer:
                 # data was skipped; fill in missing regions with 0 or nan.
                 self._write(fill_start, fill_stop, self._filler)
                 revert_inds[1] = fill_stop
-
+                
             self._write(self._write_index - dsize, self._write_index, data)
                 
             self._set_read_index(index)
@@ -308,10 +179,6 @@ class RingBuffer:
         else:
             n = self.buffer.shape[0]-i
             if hasattr(value, '__len__'):
-                valueIsArray = (len(value) > 1)
-            else:
-                valueIsArray = False
-            if valueIsArray:
                 # case array
                 self.buffer[i:] = value[:n]
                 self.buffer[:dsize-n] = value[n:]
@@ -320,6 +187,43 @@ class RingBuffer:
                 self.buffer[i:] = value
                 self.buffer[:dsize-n] = value
 
+    def _check_index_bounds(
+            self, start=None, stop=None,
+            start_index=None, stop_index=None):
+        if stop is not None:
+            err_message = (
+                f"Stop index {stop:,} is out of bounds"
+                f"for ring buffer [{start_index:,}, {stop_index:,}]")
+            if stop > stop_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    stop = stop_index
+            elif stop <= start_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    stop = start_index + 1
+        if start is not None:
+            err_message = (
+                f"Start index {start:,} is out of bounds"
+                f"for ring buffer [{start_index:,}, {stop_index:,}]")
+            if start >= stop_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    start = stop_index - 1
+            elif start < start_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    start = start_index
+        return start, stop
+
     def __getitem__(self, item):
         if isinstance(item, tuple):
             first = item[0]
@@ -327,6 +231,7 @@ class RingBuffer:
         else:
             first = item
             rest = None
+        
         if isinstance(first, (int, np.integer)):
             start = self._interpret_index(first)
             stop = start + 1
@@ -340,6 +245,7 @@ class RingBuffer:
                 data = data[rest]
         else:
             raise TypeError("Invalid index type %s" % type(first))
+        
         return data
 
     def get_data(self, start, stop, copy=False, join=True):
@@ -364,10 +270,7 @@ class RingBuffer:
             and the caller does not require a contiguous array.
         """
         first, last = self.first_index(), self.index()
-        start, stop = check_bounds_slice(
-            start, stop,
-            first, last, self.raise_errors
-            )
+        start, stop = self._check_index_bounds(start, stop, first, last)
 
         bsize = self.shape[0]
         copied = False
@@ -377,12 +280,11 @@ class RingBuffer:
             # this is util at the beging to get larger buffer than already possible
             #start_ind = start % bsize
             #stop_ind = start_ind + (stop - start)
-            #
+            
             # I prefer this which equivalent but work with start<0:
-            stop_ind = stop % bsize + bsize
+            stop_ind = stop%bsize + bsize
             start_ind = stop_ind - (stop - start)
-            if LOGGING:
-                logger.info(f"RingBuffer {hex(id(self))}: get_data({start}, {stop}) = buffer[{start_ind}:{stop_ind}] (double buffer, bounds are <{first}:{last}>)")
+            
             data = self.buffer[start_ind:stop_ind]
         else:
             break_index = self._write_index - (self._write_index % bsize)
@@ -390,15 +292,11 @@ class RingBuffer:
                 start_ind = start % bsize
                 stop_ind = start_ind + (stop - start)
                 data = self.buffer[start_ind:stop_ind]
-            if LOGGING:
-                logger.info(f"RingBuffer {hex(id(self))}: get_data({start}, {stop}) = buffer[{start_ind}:{stop_ind}] (single buffer, no break, bounds are <{first}:{last}>)")
             else:
                 # need to reconstruct from two pieces
                 newshape = np.array((stop-start,) + self.shape[1:])[self.axisorder]
                 a = self.buffer[start%bsize:]
                 b = self.buffer[:stop%bsize]
-                if LOGGING:
-                    logger.info(f"RingBuffer {hex(id(self))}: get_data({start}, {stop}) = (buffer[{start%bsize}:], buffer[:{stop%bsize}]) (single buffer, nbreak, bounds are <{first}:{last}>)")
                 if join is False:
                     if copy is True:
                         return (a.copy(), b.copy())
@@ -411,10 +309,10 @@ class RingBuffer:
                     data[:a.shape[0]] = a
                     data[a.shape[0]:] = b
                     copied = True
-        #
+        
         if copy and not copied:
             data = data.copy()
-        #
+            
         if join:
             return data
         else:
@@ -429,26 +327,12 @@ class RingBuffer:
         the step is negative. This makes it possible to collect the result in
         the forward direction and handle the step later.
         """
-        start_index = self._write_index - self.shape[0]
-        last = self._read_index
+        first, last = self.first_index(), self.index()
         if isinstance(index, (int, np.integer)):
-            start = index
             if index < 0:
-                start += last
-            if start >= last or start < start_index:
-                err_message = f"Index {start} is out of bounds for ring buffer [{start_index}:{last}]"
-                if self.raise_errors:
-                    raise IndexError(err_message)
-                else:
-                    warnings.warn(err_message)
-                    # clip it
-                    if start >= last:
-                        start = last - 1
-                    elif start < start_index:
-                        start = start_index
-            if LOGGING:
-                logger.info(f'RingBuffer {hex(id(self))}: _interpret_index({index}) = {start}')
-            return start
+                index += last
+            index, _ = self._check_index_bounds(index, None, first, last)
+            return index
         elif isinstance(index, slice):
             start, stop, step = index.start, index.stop, index.step
             # Handle None and negative steps
@@ -458,7 +342,7 @@ class RingBuffer:
                 start, stop = stop, start
             # Interpret None and negative indices
             if start is None:
-                start = start_index
+                start = first
             else:
                 if start < 0:
                     start += last
@@ -471,11 +355,10 @@ class RingBuffer:
                     stop += last
                 if step < 0:
                     stop += 1
-            if LOGGING:
-                logger.info(f'RingBuffer {hex(id(self))}: _interpret_index({index}) = Slice({start}, {stop}, {step})')
-            start, stop = check_bounds_slice(
-                start, stop,
-                start_index, last, self.raise_errors)
+            # Bounds check.
+            # Perhaps we could clip the returned data like lists/arrays do,
+            # but in this case the feedback is likely to be useful to the user.
+            start, stop = self._check_index_bounds(start, stop, first, last)
             return start, stop, step
         else:
             raise TypeError("Invalid index %s" % index)

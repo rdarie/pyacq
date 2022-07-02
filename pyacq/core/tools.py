@@ -128,8 +128,12 @@ class ThreadStreamConverter(ThreadPollInput):
     """Thread that polls for data on an input stream and converts the transfer
     mode or time axis of the data before relaying it through its output.
     """
-    def __init__(self, input_stream, output_stream, conversions,timeout=200, parent=None):
-        ThreadPollInput.__init__(self, input_stream, timeout=timeout, return_data=True, parent=parent)
+    def __init__(
+            self, input_stream, output_stream,
+            conversions, timeout=200, parent=None):
+        ThreadPollInput.__init__(
+            self, input_stream, timeout=timeout,
+            return_data=True, parent=parent)
         self.output_stream = weakref.ref(output_stream)
         self.conversions = conversions
         
@@ -189,8 +193,9 @@ class StreamConverter(Node):
                 
         # DO some check ???
         # if 'shape' in self.conversions:
-        #    assert 'timeaxis' in self.conversions        
-        self.thread = ThreadStreamConverter(self.input, self.output, self.conversions)
+        #    assert 'timeaxis' in self.conversions
+        self.thread = ThreadStreamConverter(
+            self.input, self.output, self.conversions)
     
     def _start(self):
         self.thread.start()

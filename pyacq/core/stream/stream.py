@@ -13,6 +13,10 @@ from .streamhelpers import all_transfermodes
 from ..rpc import ObjectProxy
 from .arraytools import fix_struct_dtype, make_dtype
 import pdb
+import logging
+
+LOGGING = True
+logger = logging.getLogger(__name__)
 
 default_stream = dict(
     protocol='tcp',
@@ -314,6 +318,10 @@ class InputStream(object):
         """
         index, data = self.receiver.recv(**kargs)
         if self._own_buffer and data is not None and self.buffer is not None:
+            if LOGGING:
+                logger.info(
+                    f"{self.name}.buf[{id(self.buffer):X}].new_chunk()"
+                    )
             self.buffer.new_chunk(data, index=index)
         return index, data
     
@@ -334,6 +342,8 @@ class InputStream(object):
         
         This closes the socket. No data can be received after this point.
         """
+        if self.buffer.shm_id is not None:
+            self.buffer._shm.close()
         self.receiver.close()
         self.socket.close()
         del self.socket
@@ -361,7 +371,8 @@ class InputStream(object):
             raise TypeError("No ring buffer configured for this InputStream.")
         return self.buffer.get_data(*args, **kargs)
     
-    def set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None):
+    def set_buffer(
+            self, size=None, double=True, axisorder=None, shmem=None, fill=None):
         """Ensure that this InputStream has a RingBuffer at least as large as 
         *size* and with the specified double-mode and axis order.
         

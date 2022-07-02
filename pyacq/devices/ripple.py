@@ -3,6 +3,7 @@
 # Distributed under the (new) BSD License. See LICENSE for more info.
 
 import pdb, traceback
+import warnings
 try:
     import xipppy
     HAVE_XIPPPY = True
@@ -14,8 +15,8 @@ try:
         'spk': xipppy.spk_data,
         'stim': xipppy.stim_data
         }
-except ImportError:
-    traceback.print_exc()
+except ImportError as error:
+    warnings.warn(f"{error}")
     HAVE_XIPPPY = False
     xipppy = None
     ripple_dataReaderFuns = {
@@ -74,10 +75,12 @@ _dtype_segmentDataPacket = [
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
 #
 _xp_spk = DummySegmentDataPacket()
-ripple_event_filler = np.array([(_xp_spk.timestamp, 0, np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
+ripple_event_filler = np.array([(
+    _xp_spk.timestamp, 0,
+    np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
 _dtype_analogsignal  = [
     ('timestamp', 'int'), ('value', 'float64')]
-ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
+ripple_analogsignal_filler = np.array([(0, 0.),], dtype=_dtype_analogsignal)
 
 
 # _dtype_analogsignal = 'float64'
@@ -85,10 +88,17 @@ ripple_analogsignal_filler = np.array([(0, np.nan),], dtype=_dtype_analogsignal)
 
 
 ripple_sample_rates = {
-    'raw': int(30e3),
-    'hi-res': int(2e3),
-    'hifreq': int(15e3),
-    'lfp': int(1e3),
+    'raw': 30e3, # int(30e3),
+    'hi-res': 2e3, # int(2e3),
+    'hifreq': 15e3, # int(15e3),
+    'lfp': 1e3, # int(1e3),
+    }
+
+ripple_nip_sample_periods = {
+    'raw': 1, # int(30e3),
+    'hi-res': 15, # int(2e3),
+    'hifreq': 2, # int(15e3),
+    'lfp': 30, # int(1e3),
     }
 
 # dummy input
@@ -165,7 +175,7 @@ def dummySpk(t_start, t_stop, max_spk):
 
 class DummyXipppy():
     t_zero = time.time()
-    _num_elecs = 32
+    _num_elecs = 16
 
     SegmentDataPacket = DummySegmentDataPacket
 
@@ -265,28 +275,20 @@ class XipppyTxBuffer(Node):
     """
     sortEventOutputs = False
     _output_specs = {
-        'raw': {
+        signalType: {
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['raw'],
-            'compression': '', 'fill': ripple_analogsignal_filler},
-        'hi-res': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['hi-res'],
-            'compression': '', 'fill': ripple_analogsignal_filler},
-        'hifreq': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['hifreq'],
-            'compression': '', 'fill': ripple_analogsignal_filler},
-        'lfp': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'sample_rate': ripple_sample_rates['lfp'],
-            'compression': '', 'fill': ripple_analogsignal_filler},
+            'sample_rate': ripple_sample_rates[signalType],
+            'nip_sample_period': ripple_nip_sample_periods[signalType],
+            'compression': '', 'fill': ripple_analogsignal_filler}
+        for signalType in ripple_analogsignal_types
+        }
+    _output_specs.update({
         'stim': {
             'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
             'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
-            }
+            })
 
     def __init__(self, dummy=False, dummy_kwargs=dict(), **kargs):
         Node.__init__(self, **kargs)
@@ -480,25 +482,26 @@ class XipppyThread(QtCore.QThread):
                 for signalType in self.node.present_analogsignal_types:
                     # if first_buffer:
                     #     self.buffers_num_samples[signalType] = 0
-                    sr = self.node.outputs[signalType].spec['sample_rate']
+                    points_per_period = self.node.outputs[signalType].spec['nip_sample_period']
                     thisNumChans = self.node.outputs[signalType].spec['nb_channel']
-                    nPoints = int(delta_nip_time * sr / 3e4)
+                    nPoints = int(delta_nip_time / points_per_period)
                     ## [data, timestamp] = xipppy.cont_x(npoints, elecs, start_timestamp)
                     [data, timestamp] = self.node.dataReaderFuns[signalType](
                         nPoints, # read the missing number of points
                         # self.max_buffer_nip, # read as many points as you can
                         self.node.channels[signalType],
-                        self.last_nip_time + 1 # start with last missing sample
+                        self.last_nip_time # start with last missing sample
                         )
                     if _dtype_analogsignal == 'float64':
                         data_out = np.array(data, dtype=_dtype_analogsignal)
                     else:
-                        tOneChan = timestamp + np.arange(len(data) / thisNumChans, dtype='int') * np.round(3e4 / sr).astype('int')
+                        tOneChan = timestamp + np.arange(len(data) / thisNumChans, dtype='int') * points_per_period
                         # data = np.array([item for item in zip(t, data)], dtype=_dtype_analogsignal)
                         data_out = np.empty((len(data),), dtype=_dtype_analogsignal)
                         data_out['timestamp'] = np.tile(tOneChan, thisNumChans)
                         data_out['value'] = data
-                    data_out = data_out.reshape(self.node.outputs[signalType].spec['shape'], order='F')
+                    data_out = data_out.reshape(
+                        self.node.outputs[signalType].spec['shape'], order='F')
                     if self.node.verbose:
                         print('signal type {}\n\tread {} samples x {} chans'.format(
                             signalType, data_out.shape[0], data.shape[1]))
@@ -508,11 +511,15 @@ class XipppyThread(QtCore.QThread):
                     # self.buffers_num_samples[signalType] += data.shape[0]
                     # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
                     # self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
+                    '''
                     if first_buffer:
                         self.node.outputs[signalType].spec.update({
                             't_start': timestamp / 3e4,
                             })
-                    self.node.outputs[signalType].send(data_out)
+                            '''
+                    equiv_index = int(timestamp / points_per_period + data_out.shape[0])
+                    # print(f'{signalType}: equiv_index = {equiv_index}')
+                    self.node.outputs[signalType].send(data_out, index = equiv_index)
                 # send stim events
                 for signalType in self.node.present_event_types:
                     if self.node.sortEventOutputs:
