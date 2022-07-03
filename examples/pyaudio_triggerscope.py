@@ -33,7 +33,7 @@ dev.initialize()
 
 # Create a triggered oscilloscope to display data.
 viewer = QTriggeredOscilloscope()
-viewer.configure(with_user_dialog = True)
+viewer.configure(with_user_dialog=True)
 
 # Connect audio stream to oscilloscope
 viewer.input.connect(dev.output)

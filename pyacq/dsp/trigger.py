@@ -14,8 +14,13 @@ from ..core import (Node, register_node_type, ThreadPollInput, StreamConverter)
 class TriggerThread(ThreadPollInput):
     new_triggers = QtCore.pyqtSignal(object)
     
-    def __init__(self, input_stream, output_stream, timeout = 200, parent = None, emit_qt_signal=False):
-        ThreadPollInput.__init__(self, input_stream, timeout = timeout, return_data=None, parent = parent)
+    def __init__(
+            self, input_stream, output_stream, timeout=200,
+            parent=None, emit_qt_signal=False):
+        ThreadPollInput.__init__(
+            self, input_stream, timeout=timeout, return_data=None,
+            parent=parent)
+
         self.output_stream = weakref.ref(output_stream)
         
         self.emit_qt_signal = emit_qt_signal
@@ -114,7 +119,7 @@ class DigitalTriggerThread(TriggerThread):
         self.mask = 1<<(self.channel%dt.itemsize)
 
 
-class TriggerBase(Node,  QtCore.QObject):
+class TriggerBase(Node, QtCore.QObject):
     _input_specs = {'signals' : dict(streamtype = 'signals')}
     _output_specs = {'events' : dict(streamtype = 'events', dtype ='int64', shape = (-1, ))}
     
@@ -123,7 +128,7 @@ class TriggerBase(Node,  QtCore.QObject):
                         {'name': 'threshold', 'type': 'float', 'value': 0.},
                         {'name': 'front', 'type': 'list', 'value': '+' , 'values' : ['+', '-'] },
                         {'name': 'debounce_mode', 'type': 'list', 'value': 'no-debounce' ,
-                                            'values' : ['no-debounce', 'after-stable', 'before-stable'] },
+                            'values' : ['no-debounce', 'after-stable', 'before-stable'] },
                         {'name': 'debounce_time', 'type': 'float', 'value': 0.01},
                 ]
     
@@ -132,8 +137,9 @@ class TriggerBase(Node,  QtCore.QObject):
     def __init__(self, parent = None, **kargs):
         QtCore.QObject.__init__(self, parent)
         Node.__init__(self, **kargs)
-        self.params = pg.parametertree.Parameter.create( name='Trigger options',
-                                                    type='group', children =self._default_params)
+        self.params = pg.parametertree.Parameter.create(
+            name='Trigger options',
+            type='group', children =self._default_params)
     
     def _configure(self, max_size=2., emit_qt_signal=False):
         self.max_size = max_size

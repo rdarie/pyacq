@@ -6,8 +6,11 @@ import numpy as np
 
 from .sharedarray import SharedMem, SharedArray
 from .arraytools import make_dtype
-
+import traceback, pdb
 import warnings
+import logging
+LOGGING = False
+logger = logging.getLogger(__name__)
 
 class RingBuffer:
     """Class that collects data as it arrives from an InputStream and writes it
@@ -28,6 +31,7 @@ class RingBuffer:
         self.raise_errors = raise_errors
 
         dtype = make_dtype(dtype) # fix dtype serialization
+        #
         # order of axes as written in memory. This does not affect the shape of the 
         # buffer as seen by the user, but can be used to make sure a specific axis
         # is contiguous in memory.
@@ -120,6 +124,8 @@ class RingBuffer:
         self._set_read_index(0)
     
     def new_chunk(self, data, index=None):
+        if LOGGING:
+            logger.info(f"buf[{id(self):X}].new_chunk()")
         dsize = data.shape[0]
         bsize = self.shape[0]
         if dsize > bsize:
@@ -178,7 +184,12 @@ class RingBuffer:
             self.buffer[i:i+dsize] = value
         else:
             n = self.buffer.shape[0]-i
+            #try:
+            is_array = False
             if hasattr(value, '__len__'):
+                if len(value) > 1:
+                    is_array = True
+            if is_array:
                 # case array
                 self.buffer[i:] = value[:n]
                 self.buffer[:dsize-n] = value[n:]
@@ -186,30 +197,19 @@ class RingBuffer:
                 # case value is a scalar (when self._filler)
                 self.buffer[i:] = value
                 self.buffer[:dsize-n] = value
+            #except:
+            #    traceback.print_exc()
+            #    pdb.set_trace()
 
     def _check_index_bounds(
             self, start=None, stop=None,
             start_index=None, stop_index=None):
-        if stop is not None:
-            err_message = (
-                f"Stop index {stop:,} is out of bounds"
-                f"for ring buffer [{start_index:,}, {stop_index:,}]")
-            if stop > stop_index:
-                if self.raise_errors:
-                    raise(IndexError(err_message))
-                else:
-                    warnings.warn(err_message)
-                    stop = stop_index
-            elif stop <= start_index:
-                if self.raise_errors:
-                    raise(IndexError(err_message))
-                else:
-                    warnings.warn(err_message)
-                    stop = start_index + 1
+        start_str = '' if start is None else f'{start:,}'
+        stop_str = '' if stop is None else f'{stop:,}'
+        err_message = (
+            f"Requested index(es) {start_str}:{stop_str} are out of bounds "
+            f"for ring buffer [{start_index:,}:{stop_index:,}]")
         if start is not None:
-            err_message = (
-                f"Start index {start:,} is out of bounds"
-                f"for ring buffer [{start_index:,}, {stop_index:,}]")
             if start >= stop_index:
                 if self.raise_errors:
                     raise(IndexError(err_message))
@@ -222,6 +222,19 @@ class RingBuffer:
                 else:
                     warnings.warn(err_message)
                     start = start_index
+        if stop is not None:
+            if stop > stop_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    stop = stop_index
+            elif stop <= start_index:
+                if self.raise_errors:
+                    raise(IndexError(err_message))
+                else:
+                    warnings.warn(err_message)
+                    stop = start_index + 1
         return start, stop
 
     def __getitem__(self, item):
@@ -269,6 +282,8 @@ class RingBuffer:
             used to avoid an unnecessary copy when the buffer has double=False
             and the caller does not require a contiguous array.
         """
+        if LOGGING:
+            logger.info(f"buffer[{id(self):X}].get_data()")
         first, last = self.first_index(), self.index()
         start, stop = self._check_index_bounds(start, stop, first, last)
 
@@ -282,9 +297,8 @@ class RingBuffer:
             #stop_ind = start_ind + (stop - start)
             
             # I prefer this which equivalent but work with start<0:
-            stop_ind = stop%bsize + bsize
+            stop_ind = stop % bsize + bsize
             start_ind = stop_ind - (stop - start)
-            
             data = self.buffer[start_ind:stop_ind]
         else:
             break_index = self._write_index - (self._write_index % bsize)

@@ -319,9 +319,7 @@ class InputStream(object):
         index, data = self.receiver.recv(**kargs)
         if self._own_buffer and data is not None and self.buffer is not None:
             if LOGGING:
-                logger.info(
-                    f"{self.name}.buf[{id(self.buffer):X}].new_chunk()"
-                    )
+                logger.info(f"{self.name: >10}-buf[{id(self.buffer):X}].new_chunk(dsize={data.shape[0]})")
             self.buffer.new_chunk(data, index=index)
         return index, data
     
@@ -342,8 +340,6 @@ class InputStream(object):
         
         This closes the socket. No data can be received after this point.
         """
-        if self.buffer.shm_id is not None:
-            self.buffer._shm.close()
         self.receiver.close()
         self.socket.close()
         del self.socket
@@ -390,7 +386,6 @@ class InputStream(object):
                 self.buffer = buf
                 self._own_buffer = own
                 return
-            
         # attach a new buffer
         shape = (size,) + tuple(self.params['shape'][1:])
         dtype = make_dtype(self.params['dtype'])

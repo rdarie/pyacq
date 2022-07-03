@@ -5,7 +5,7 @@
 from .imageviewer import ImageViewer
 from .qoscilloscope import QOscilloscope
 from .qtimefreq import TimeFreqWorker, QTimeFreq
-from .qtriggeredoscilloscope import QTriggeredOscilloscope
+from .qtriggeredoscilloscope import QTriggeredOscilloscope, QDigitalTriggeredOscilloscope
 from .qdigitaloscilloscope import QDigitalOscilloscope
 from .qoscilloscopemultiplot import QOscilloscopeMultiPlot
 from .ephyviewer_mixin import *

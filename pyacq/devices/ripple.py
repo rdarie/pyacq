@@ -32,6 +32,7 @@ from scipy import signal
 import time
 from copy import copy, deepcopy
 from ..core import Node, register_node_type
+from ..core.tools import ThreadPollInput, weakref, make_dtype
 from pyqtgraph.Qt import QtCore # , QtGui
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
@@ -71,7 +72,7 @@ ripple_event_types = ['stim'] # 'macro' does not have 'spk' type
 ripple_signal_types = ripple_analogsignal_types + ripple_event_types
 ripple_fe_types = ['macro'] # TODO: iterate front end types
 _dtype_segmentDataPacket = [
-    ('timestamp', 'int', (1,)), ('channel', 'int', (1,)),
+    ('timestamp', 'int64', (1,)), ('channel', 'int', (1,)),
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
 #
 _xp_spk = DummySegmentDataPacket()
@@ -79,10 +80,10 @@ ripple_event_filler = np.array([(
     _xp_spk.timestamp, 0,
     np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
 _dtype_analogsignal  = [
-    ('timestamp', 'int'), ('value', 'float64')]
+    ('timestamp', 'int64'), ('value', 'float64')]
 ripple_analogsignal_filler = np.array([(0, 0.),], dtype=_dtype_analogsignal)
 
-
+sortEventOutputs = False
 # _dtype_analogsignal = 'float64'
 # ripple_analogsignal_filler = np.nan
 
@@ -157,14 +158,16 @@ rng = np.random.default_rng(12345)
 
 def dummySpk(t_start, t_stop, max_spk):
     t_interval = t_stop - t_start
-    spkFreq = 15 # Hz
+    spkFreq = 5 # Hz
     count = np.round((spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
-    timestamps = rng.random((count,))
+    if count == 0:
+        return 0, []
+    timestamps = rng.random((count+2,))
     timestamps /= timestamps.sum()
     timestamps = np.floor(timestamps.cumsum() * t_interval)
     # timestamps = np.linspace(0, t_interval * (1 - rng.random() / 10.), count)
     data = []
-    for dt in timestamps:
+    for dt in timestamps[1:-1]:
         if HAVE_XIPPPY:
             spk = xipppy.SegmentDataPacket()
         else:
@@ -273,7 +276,7 @@ class XipppyTxBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
     """
-    sortEventOutputs = False
+    _sortEventOutputs = sortEventOutputs
     _output_specs = {
         signalType: {
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
@@ -284,7 +287,7 @@ class XipppyTxBuffer(Node):
         }
     _output_specs.update({
         'stim': {
-            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': _sortEventOutputs,
             'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
         # 'spk': {
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
@@ -313,7 +316,7 @@ class XipppyTxBuffer(Node):
         self.sample_interval_sec = None
         self.sample_interval_nip = None
         self.sample_chunksize_sec = None
-        self.buffer_padding_sec = None
+        self.buffer_size_sec = None
         self.latency_padding_sec = None
         self.allElecs = []
         self.present_analogsignal_types = []
@@ -325,7 +328,7 @@ class XipppyTxBuffer(Node):
     def _configure(
             self,
             sample_interval_sec=1., sample_chunksize_sec=.5,
-            buffer_padding_sec=250e-3, latency_padding_sec=50e-3,
+            buffer_size_sec=250e-3, latency_padding_sec=50e-3,
             xipppy_use_tcp=True,
             channels={}, verbose=False, debugging=False):
         #
@@ -333,7 +336,7 @@ class XipppyTxBuffer(Node):
         self.sample_interval_sec = sample_interval_sec
         self.sample_interval_nip = int(self.sample_interval_sec * 3e4)
         self.sample_chunksize_sec = sample_chunksize_sec
-        self.buffer_padding_sec = buffer_padding_sec
+        self.buffer_size_sec = buffer_size_sec
         self.latency_padding_sec = latency_padding_sec
         self.verbose = verbose
         self.debugging = debugging
@@ -383,7 +386,7 @@ class XipppyTxBuffer(Node):
                     sr = self.outputs[signalType].spec['sample_rate']
                     self.outputs[signalType].spec.update({
                         'chunksize': int(sr * self.sample_chunksize_sec),
-                        'buffer_size': int(sr * (self.sample_interval_sec + self.buffer_padding_sec)),
+                        'buffer_size': int(sr * (self.sample_interval_sec + self.buffer_size_sec)),
                         })
                     if thisNumChans > 0:
                         self.outputs[signalType].spec.update({
@@ -495,7 +498,7 @@ class XipppyThread(QtCore.QThread):
                     if _dtype_analogsignal == 'float64':
                         data_out = np.array(data, dtype=_dtype_analogsignal)
                     else:
-                        tOneChan = timestamp + np.arange(len(data) / thisNumChans, dtype='int') * points_per_period
+                        tOneChan = timestamp + np.arange(len(data) / thisNumChans, dtype='int64') * points_per_period
                         # data = np.array([item for item in zip(t, data)], dtype=_dtype_analogsignal)
                         data_out = np.empty((len(data),), dtype=_dtype_analogsignal)
                         data_out['timestamp'] = np.tile(tOneChan, thisNumChans)
@@ -522,28 +525,41 @@ class XipppyThread(QtCore.QThread):
                     self.node.outputs[signalType].send(data_out, index = equiv_index)
                 # send stim events
                 for signalType in self.node.present_event_types:
-                    if self.node.sortEventOutputs:
-                        ########################################################
-                        # Sort events by timestamp
-                        chanNums = []
-                        packets = []
-                        for chanIdx in self.node.channels[signalType]:
-                            ## (count, data) = xipppy.stim_data(elecs, max_spk)
-                            [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
-                            chanNums += [chanIdx for _ in packetList]
-                            packets += packetList
-                            if len(packetList) and self.node.verbose:
-                                print([(dat.timestamp, chanIdx, dat.class_id) for dat in packetList])
-                        nPackets = len(packets)
-                        if nPackets > 0:
+                    '''
+                    if self.node._sortEventOutputs:
+                        '''
+                    chanNums = []
+                    packets = []
+                    for chanIdx in self.node.channels[signalType]:
+                        ## (count, data) = xipppy.stim_data(elecs, max_spk)
+                        [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
+                        chanNums += [chanIdx for _ in packetList]
+                        packets += packetList
+                        if len(packetList) and self.node.verbose:
+                            print([(dat.timestamp, chanIdx, dat.class_id) for dat in packetList])
+                    nPackets = len(packets)
+                    if nPackets > 0:
+                        if self.node._sortEventOutputs:
+                            ########################################################
+                            # Sort events by timestamp
                             outputPacket = np.array(
                                 [
                                     (dat.timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
                                     for ch, dat in sorted(zip(chanNums, packets), key=_spikeKeyExtractor)],
                                 dtype=_dtype_segmentDataPacket)
-                            self.node.outputs[signalType].send(outputPacket)
+                        else:
+                            ########################################################
+                            # Leave items sorted by channel
+                            outputPacket = np.array(
+                                [
+                                    (dat.timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
+                                    for ch, dat in zip(chanNums, packets)],
+                                dtype=_dtype_segmentDataPacket)
+                        self.node.outputs[signalType].send(outputPacket)
+                    '''
                     else:
                         ########################################################
+                        # send each channel's data individually
                         # do not sort event outputs
                         for chanIdx in self.node.channels[signalType]:
                             ## (count, data) = xipppy.stim_data(elecs, max_spk)
@@ -556,6 +572,7 @@ class XipppyThread(QtCore.QThread):
                                         for dat in packetList],
                                     dtype=_dtype_segmentDataPacket)
                                 self.node.outputs[signalType].send(outputPacket)
+                    '''
                 first_buffer = False
                 self.num_requests += 1
                 self.last_nip_time = copy(self.head)
@@ -570,3 +587,89 @@ class XipppyThread(QtCore.QThread):
 
 
 register_node_type(XipppyTxBuffer)
+
+
+class RippleThreadStreamConverter(ThreadPollInput):
+    """Thread that polls for data on an input stream and converts the transfer
+    mode or time axis of the data before relaying it through its output.
+    """
+    def __init__(
+            self, input_stream, output_stream,
+            signal_type=None, nip_sample_period=None,
+            timeout=200, parent=None):
+        ThreadPollInput.__init__(
+            self, input_stream, timeout=timeout,
+            return_data=True, parent=parent)
+        self.output_stream = weakref.ref(output_stream)
+        self.signal_type = signal_type
+        self.nip_sample_period = nip_sample_period
+        self.output_dtype = make_dtype(self.output_stream().params['dtype'])
+        
+    def process_data(self, pos, data):
+        if self.signal_type == 'analog':
+            output = data['value']
+            self.output_stream().send(output, index=pos)
+        elif self.signal_type == 'events':
+            mask = data['channel'] == 13
+            output = np.sort(data['timestamp'][mask] / self.nip_sample_period).astype(self.output_dtype)
+            # print(f"stream convert trig {output}")
+            self.output_stream().send(output, index=pos)
+
+
+class RippleStreamAdapter(Node):
+
+    _input_specs = {
+        'signals': {
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
+            'compression': '', 'fill': ripple_analogsignal_filler},
+        'events' : {
+            'streamtype': 'event', 'shape': (-1,),
+            'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
+        }
+    _output_specs = {
+        'signals': {
+            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'compression': '', 'fill': 0., },
+        'events' : {
+            'streamtype': 'event', 'shape': (-1,),
+            'fill': ripple_event_filler, 'dtype': 'int64',}, 
+        }
+    
+    def __init__(self, **kargs):
+        Node.__init__(self, **kargs)
+        self.threads = {}
+    
+    def _configure(self):
+        pass
+
+    def _initialize(self):
+        self.sample_rate = self.inputs['signals'].params['sample_rate']
+        self.nip_sample_period  = self.inputs['signals'].params['nip_sample_period']
+        for param_name in ['sample_rate', 'nip_sample_period', 'shape']:
+            self.outputs['signals'].params[param_name] = self.inputs['signals'].params[param_name]
+        #
+        self.threads['signals'] = RippleThreadStreamConverter(
+            self.inputs['signals'], self.outputs['signals'],
+            signal_type='analog', nip_sample_period=self.nip_sample_period)
+        self.threads['events'] = RippleThreadStreamConverter(
+            self.inputs['events'], self.outputs['events'],
+            signal_type='events', nip_sample_period=self.nip_sample_period)
+        # print(f"self.outputs['signals'].params['shape'] = {self.outputs['signals'].params['shape']}")
+        # print(f"self.outputs['events'].params.keys() = {self.outputs['events'].params.keys()}")
+        # print(f"self.inputs['signals'].params['shape'] = {self.inputs['signals'].params['shape']}")
+        # print(f"self.inputs['events'].params.keys() = {self.inputs['events'].params.keys()}")
+    
+    def _start(self):
+        self.threads['signals'].start()
+        self.threads['events'].start()
+
+    def _stop(self):
+        self.threads['signals'].stop()
+        self.threads['signals'].wait()
+        self.threads['events'].stop()
+        self.threads['events'].wait()
+    
+    def _close(self):
+        pass
+
+register_node_type(RippleStreamAdapter)

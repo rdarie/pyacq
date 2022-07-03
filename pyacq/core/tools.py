@@ -16,6 +16,9 @@ from .node import Node, register_node_type
 from .stream import OutputStream, InputStream
 from .stream.arraytools import make_dtype
 
+LOGGING = True
+logger = logging.getLogger(__name__)
+
 
 class ThreadPollInput(QtCore.QThread):
     """Thread that polls an InputStream in the background and emits a signal
@@ -49,6 +52,7 @@ class ThreadPollInput(QtCore.QThread):
             self, input_stream, timeout=200, return_data=None, parent=None):
         QtCore.QThread.__init__(self, parent)
         self.input_stream = weakref.ref(input_stream)
+        self.setObjectName(f'ThreadPollInput_{self.input_stream().name}')
         self.timeout = timeout
         self.return_data = return_data
         if self.return_data is None:
@@ -136,7 +140,6 @@ class ThreadStreamConverter(ThreadPollInput):
             return_data=True, parent=parent)
         self.output_stream = weakref.ref(output_stream)
         self.conversions = conversions
-        
         self.output_dtype = make_dtype(self.output_stream().params['dtype'])
         
     def process_data(self, pos, data):
