@@ -110,7 +110,10 @@ class RingBuffer:
     @property
     def _read_index(self):
         return self._indexes[0]
-
+    
+    def __len__(self):
+        return self.shape[0]
+    
     def _set_write_index(self, i):
         # what kind of protection do we need here?
         self._indexes[1] = i

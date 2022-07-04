@@ -75,9 +75,9 @@ class TriggerAccumulator(Node, QtCore.QObject):
     _output_specs = {}
     
     _default_params = [
-            {'name': 'left_sweep', 'type': 'float', 'value': -1., 'step': 0.1,'suffix': 's', 'siPrefix': True},
-            {'name': 'right_sweep', 'type': 'float', 'value': 1., 'step': 0.1, 'suffix': 's', 'siPrefix': True},
-            { 'name' : 'stack_size', 'type' :'int', 'value' : 1,  'limits':[1,np.inf] },
+            {'name': 'left_sweep', 'type': 'float', 'value': -.5, 'step': 0.1,'suffix': 's', 'siPrefix': True},
+            {'name': 'right_sweep', 'type': 'float', 'value': .5, 'step': 0.1, 'suffix': 's', 'siPrefix': True},
+            { 'name' : 'stack_size', 'type' :'int', 'value' : 100,  'limits':[1,np.inf] },
                 ]
     
     new_chunk = QtCore.pyqtSignal(int)
@@ -89,7 +89,8 @@ class TriggerAccumulator(Node, QtCore.QObject):
             name='Accumulator options', type='group', children =self._default_params)
     
     def _configure(
-            self, max_stack_size = 10, max_xsize=2., events_dtype_field = None):
+            self, max_stack_size=200, max_xsize=2.,
+            events_dtype_field=None):
         """
         Arguments
         ---------------
@@ -101,10 +102,9 @@ class TriggerAccumulator(Node, QtCore.QObject):
             Standart dtype for 'events' input is 'int64',
             In case of complex dtype (ex : dtype = [('index', 'int64'), ('label', 'S12), ) ] you can precise which
             filed is the index.
-            
-        
         """
-        self.params.sigTreeStateChanged.connect(self.on_params_change)
+        self.params.sigTreeStateChanged.connect(
+            self.on_params_change)
         self.max_stack_size = max_stack_size
         self.events_dtype_field = events_dtype_field
         self.params.param('stack_size').setLimits([1, self.max_stack_size])
@@ -117,7 +117,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
         elif inputname == 'events':
             dt = np.dtype(self.inputs['events'].params['dtype'])
             if dt=='int64':
-                assert self.events_dtype_field is None,'events_dtype_field is not None but dtype is int64'
+                assert self.events_dtype_field is None, 'events_dtype_field is not None but dtype is int64'
             else:
                 assert self.events_dtype_field in dt.names, 'events_dtype_field not in input dtype {}'.format(dt)
     
@@ -156,7 +156,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
             if param.name() in ['stack_size', 'left_sweep', 'right_sweep']:
                 self.recreate_stack()
         self.params.param('left_sweep').setLimits([-np.inf, self.params['right_sweep']])
-        
+
 
     def on_new_trig(self, trig_num, trig_indexes):
         # print(f'on_new_trig {trig_indexes}')
@@ -164,7 +164,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
             logger.info(f'on_new_trig: {trig_indexes}')
         for trig_index in trig_indexes:
             if self.events_dtype_field is None:
-                self.limit_poller.append_limit(trig_index+self.limit2)
+                self.limit_poller.append_limit(trig_index + self.limit2)
             else:
                 self.limit_poller.append_limit(trig_index[self.events_dtype_field]+self.limit2)
     
@@ -175,14 +175,14 @@ class TriggerAccumulator(Node, QtCore.QObject):
         if arr is not None:
             self.stack[self.stack_pos,:,:] = arr
             self.stack_pos +=1
-            self.stack_pos = self.stack_pos%self.params['stack_size']
+            self.stack_pos = self.stack_pos % self.params['stack_size']
             self.total_trig += 1
             
             self.new_chunk.emit(self.total_trig)
 
     def recreate_stack(self):
-        self.limit1 = l1 = int(self.params['left_sweep']*self.sample_rate)
-        self.limit2 = l2 = int(self.params['right_sweep']*self.sample_rate)
+        self.limit1 = l1 = int(self.params['left_sweep'] * self.sample_rate)
+        self.limit2 = l2 = int(self.params['right_sweep'] * self.sample_rate)
         self.size = l2 - l1
         
         self.t_vect = np.arange(l2-l1)/self.sample_rate + self.params['left_sweep']
