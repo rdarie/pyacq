@@ -33,7 +33,7 @@ from tridesclous.waveformtools import extract_chunks
 from tridesclous import labelcodes
 from tridesclous.gui.base import ControllerBase
 from tridesclous.gui.traceviewer import CatalogueTraceViewer
-from tridesclous.gui.peaklists import PeakList, ClusterPeakList
+from tridesclous.gui.onlinepeaklists import OnlinePeakList, OnlineClusterPeakList
 from tridesclous.gui.onlinewaveformviewer import RippleWaveformViewer
 from tridesclous.gui.pairlist import PairList
 from tridesclous.gui.waveformhistviewer import WaveformHistViewer
@@ -1061,9 +1061,9 @@ class RippleTriggerAccumulator(TriggerAccumulator):
     _output_specs = {}
     
     _default_params = [
-        {'name': 'left_sweep', 'type': 'float', 'value': -.5, 'step': 0.1,'suffix': 's', 'siPrefix': True},
-        {'name': 'right_sweep', 'type': 'float', 'value': .5, 'step': 0.1, 'suffix': 's', 'siPrefix': True},
-        { 'name' : 'stack_size', 'type' :'int', 'value' : 100,  'limits':[1,np.inf] },
+        {'name': 'left_sweep', 'type': 'float', 'value': -.1, 'step': 0.1,'suffix': 's', 'siPrefix': True},
+        {'name': 'right_sweep', 'type': 'float', 'value': .2, 'step': 0.1, 'suffix': 's', 'siPrefix': True},
+        { 'name' : 'stack_size', 'type' :'int', 'value' : 1000,  'limits':[1,np.inf] },
             ]
     
     new_chunk = QT.pyqtSignal(int)
@@ -1244,7 +1244,7 @@ class RippleTriggerAccumulator(TriggerAccumulator):
         """
         Segment length (in sample) for a given segment index
         """
-        return self.inputs['signals'].buffer.shape[0]
+        return self.inputs['signals'].buffer.index()
     
     def get_segment_shape(self, seg_num):
         return self.inputs['signals'].buffer.shape
@@ -1500,7 +1500,7 @@ class RippleCatalogueController(ControllerBase):
         self.init_plot_attributes()
 
     def init_plot_attributes(self):
-        self.cluster_visible = {k: True for i, k  in enumerate(self.cluster_labels)}
+        self.cluster_visible = {k: True for i, k in enumerate(self.cluster_labels)}
         self.do_cluster_count()
         self.spike_selection = np.zeros(self.dataio.nb_peak, dtype='bool')
         self.spike_visible = np.ones(self.dataio.nb_peak, dtype='bool')
@@ -1515,19 +1515,15 @@ class RippleCatalogueController(ControllerBase):
         for k in list(self.cluster_visible.keys()):
             if k not in self.cluster_labels and k>=0:
                 self.cluster_visible.pop(k)
-        for code in [
-            labelcodes.LABEL_TRASH, labelcodes.LABEL_NOISE, 
-            labelcodes.LABEL_ALIEN, labelcodes.LABEL_UNCLASSIFIED,
-            labelcodes.LABEL_NO_WAVEFORM]:
+        for code in [labelcodes.LABEL_UNCLASSIFIED,]:
                 if code not in self.cluster_visible:
-                    #~ print('self.cluster_visible[labelcodes.LABEL_NOISE] = True')
-                    self.cluster_visible[labelcodes.LABEL_NOISE] = False
+                    self.cluster_visible[code] = True
         self.refresh_colors(reset=False)
         self.do_cluster_count()
     
     def do_cluster_count(self):
         self.cluster_count = { c['cluster_label']:c['nb_peak'] for c in self.clusters}
-        self.cluster_count[labelcodes.LABEL_NOISE] = 0
+        self.cluster_count[labelcodes.LABEL_UNCLASSIFIED] = 0
     
     def reload_data(self):
         self.dataio.compute_all_centroid()
@@ -1675,60 +1671,60 @@ class RippleTriggeredWindow(QT.QMainWindow):
 
         self.dataio = dataio
         self.controller = RippleCatalogueController(dataio=dataio)
-        self.thread = QT.QThread(parent=self)
-        self.controller.moveToThread(self.thread)
+        #
+        # self.thread = QT.QThread(parent=self)
+        # self.controller.moveToThread(self.thread)
+        #
         # self.traceviewer = CatalogueTraceViewer(controller=self.controller)
-        self.peaklist = PeakList(controller=self.controller)
-        self.clusterlist = ClusterPeakList(controller=self.controller)
+        self.clusterlist = OnlineClusterPeakList(controller=self.controller)
+        self.peaklist = OnlinePeakList(controller=self.controller)
         self.waveformviewer = RippleWaveformViewer(controller=self.controller)
         #
-        self.waveformviewer.params['plot_selected_spike'] = True
-        self.waveformviewer.params['display_threshold'] = False
-        #
-        self.pairlist = PairList(controller=self.controller)
-        self.waveformhistviewer = WaveformHistViewer(controller=self.controller)
+        # self.pairlist = PairList(controller=self.controller)
+        # self.waveformhistviewer = WaveformHistViewer(controller=self.controller)
         
         docks = {}
 
         docks['waveformviewer'] = QT.QDockWidget('waveformviewer',self)
         docks['waveformviewer'].setWidget(self.waveformviewer)
-        #self.tabifyDockWidget(docks['ndscatter'], docks['waveformviewer'])
         self.addDockWidget(QT.Qt.RightDockWidgetArea, docks['waveformviewer'])
+        #self.tabifyDockWidget(docks['ndscatter'], docks['waveformviewer'])
+
         '''
         docks['waveformhistviewer'] = QT.QDockWidget('waveformhistviewer',self)
         docks['waveformhistviewer'].setWidget(self.waveformhistviewer)
         self.tabifyDockWidget(docks['waveformviewer'], docks['waveformhistviewer'])
         '''
-        '''
-        docks['traceviewer'] = QT.QDockWidget('traceviewer',self)
+
+        '''docks['traceviewer'] = QT.QDockWidget('traceviewer',self)
         docks['traceviewer'].setWidget(self.traceviewer)
         #self.addDockWidget(QT.Qt.RightDockWidgetArea, docks['traceviewer'])
-        self.tabifyDockWidget(docks['waveformviewer'], docks['traceviewer'])
-        '''
-        docks['peaklist'] = QT.QDockWidget('peaklist',self)
-        docks['peaklist'].setWidget(self.peaklist)
-        self.addDockWidget(QT.Qt.LeftDockWidgetArea, docks['peaklist'])
-        
-        docks['pairlist'] = QT.QDockWidget('pairlist',self)
-        docks['pairlist'].setWidget(self.pairlist)
-        self.splitDockWidget(docks['peaklist'], docks['pairlist'], QT.Qt.Horizontal)
+        self.tabifyDockWidget(docks['waveformviewer'], docks['traceviewer'])'''
         
         docks['clusterlist'] = QT.QDockWidget('clusterlist',self)
         docks['clusterlist'].setWidget(self.clusterlist)
+
+        docks['peaklist'] = QT.QDockWidget('peaklist',self)
+        docks['peaklist'].setWidget(self.peaklist)
+        self.addDockWidget(QT.Qt.LeftDockWidgetArea, docks['peaklist'])
+        self.splitDockWidget(docks['peaklist'], docks['clusterlist'], QT.Qt.Vertical)
+        '''
+        docks['pairlist'] = QT.QDockWidget('pairlist',self)
+        docks['pairlist'].setWidget(self.pairlist)
         self.tabifyDockWidget(docks['pairlist'], docks['clusterlist'])
-        
+        '''
         self.create_actions()
         self.create_toolbar()
 
-        self.speed = 2. #  Hz
+        self.speed = 1. #  Hz
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
         for w in self.controller.views:
-            self.timer.timeout.connect(w.refresh, QT.BlockingQueuedConnection)
+            self.timer.timeout.connect(w.refresh)
 
     def start_refresh(self):
         self.timer.start()
-        self.thread.start()
+        # self.thread.start()
         pass
         
     def create_actions(self):
@@ -1765,8 +1761,8 @@ class RippleTriggeredWindow(QT.QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
-        self.thread.quit()
-        self.thread.wait()
+        # self.thread.quit()
+        # self.thread.wait()
         self.controller.dataio.stop()
         self.controller.dataio.close()
         event.accept()
