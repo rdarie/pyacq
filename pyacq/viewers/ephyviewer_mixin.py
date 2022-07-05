@@ -34,7 +34,7 @@ from tridesclous import labelcodes
 from tridesclous.gui.base import ControllerBase
 from tridesclous.gui.traceviewer import CatalogueTraceViewer
 from tridesclous.gui.peaklists import PeakList, ClusterPeakList
-from tridesclous.gui.waveformviewer import RippleWaveformViewer
+from tridesclous.gui.onlinewaveformviewer import RippleWaveformViewer
 from tridesclous.gui.pairlist import PairList
 from tridesclous.gui.waveformhistviewer import WaveformHistViewer
 
@@ -1185,16 +1185,20 @@ class RippleTriggerAccumulator(TriggerAccumulator):
     def on_limit_reached(self, limit_index):
         if LOGGING:
             logger.info(f'on limit reached: {limit_index-self.size}:{limit_index}')
-        arr = self.inputs['signals'].get_data(limit_index-self.size, limit_index)
+        # arr = self.inputs['signals'].get_data(limit_index-self.size, limit_index)
+        arr = self.get_signals_chunk(i_start=limit_index-self.size, i_stop=limit_index)
         if arr is not None:
-            with self.stack_lock:
-                self.stack[self.stack_pos,:,:] = arr['value']
+            # with self.stack_lock:
+            #     self.stack[self.stack_pos,:,:] = arr['value']
+            self.stack.new_chunk(arr.reshape(1, (self.limit2 - self.limit1) * self.nb_channel))
+            # self.new_chunk.emit(self.stack.index())
+            #
             # print(f"on_limit_reached,\nself.stack[self.stack_pos,:,:] = {self.stack[self.stack_pos,:,:]}\nself.total_trig = {self.total_trig}")
-            self.stack_pos += 1
-            self.stack_pos = self.stack_pos % self.params['stack_size']
-            self.total_trig += 1
+            # self.stack_pos += 1
+            # self.stack_pos = self.stack_pos % self.params['stack_size']
+            # self.total_trig += 1
             # print(f'self.stack.new_chunk(); self.total_trig = {self.total_trig}')
-            self.new_chunk.emit(self.total_trig)
+            # self.new_chunk.emit(self.total_trig)
 
     def recreate_stack(self):
         self.limit1 = l1 = int(self.params['left_sweep'] * self.sample_rate)
@@ -1202,12 +1206,16 @@ class RippleTriggerAccumulator(TriggerAccumulator):
         self.size = l2 - l1
         
         self.t_vect = np.arange(l2-l1)/self.sample_rate + self.params['left_sweep']
+        '''
         with self.stack_lock:
             self.stack = np.zeros(
                 (self.params['stack_size'], l2-l1, self.nb_channel),
-                dtype = 'float64')
-        self.stack_pos = 0
-        self.total_trig = 0
+                dtype = 'float64')'''
+        self.stack = RingBuffer(
+            shape=(self.params['stack_size'], (l2-l1) * self.nb_channel),
+            dtype='float64')
+        # self.stack_pos = 0
+        # self.total_trig = 0
         self.limit_poller.reset()
 
     def get_geometry(self):
@@ -1309,15 +1317,32 @@ class RippleTriggerAccumulator(TriggerAccumulator):
             channel_indexes = slice(None)
         #
         if peaks_index is None:
+            print(f'get_some_waveforms( peak_sample_indexes = {peak_sample_indexes}')
             assert peak_sample_indexes is not None, 'Provide sample_indexes'
             peaks_index = np.flatnonzero(np.isin(self.all_peaks['index'], peak_sample_indexes))
         # import pdb; pdb.set_trace()
-        peaks_index = self.params['stack_size'] - peaks_index - 1
+        # peaks_index = self.params['stack_size'] - peaks_index - 1
         print(f'get_some_waveforms( peaks_index = {peaks_index}')
+        '''
         with self.stack_lock:
             waveforms = self.stack[:, :, channel_indexes]
             waveforms = waveforms[peaks_index, :, :]
-        # print(f'get_some_waveforms( {waveforms[0, :, :]}')
+            '''
+        first = self.stack.first_index()
+        if isinstance(peaks_index, (int, np.int64)):
+            waveforms_flat = self.stack.get_data(start=peaks_index+first, stop=peaks_index+first+1).copy()
+            waveforms = waveforms_flat.reshape(self.limit2-self.limit1, self.nb_channel)
+        elif isinstance(peaks_index, slice):
+            waveforms_flat = self.stack[peaks_index]
+            waveforms = np.zeros((waveforms_flat.shape[0], self.limit2-self.limit1, self.nb_channel), dtype='float64')
+            for pk_index in range(waveforms_flat.shape[0]):
+                waveforms[pk_index, :, :] = waveforms_flat[pk_index, :].reshape(self.limit2-self.limit1, self.nb_channel)
+        else:
+            waveforms = np.zeros((len(peaks_index), self.limit2-self.limit1, self.nb_channel), dtype='float64')
+            for idx, pk_index in enumerate(peaks_index):
+                waveforms_flat = self.stack.get_data(start=pk_index + first, stop=pk_index + first + 1, copy=True, join=True)
+                waveforms[idx, :, :] = waveforms_flat.reshape(self.limit2-self.limit1, self.nb_channel)
+        print(f'get_some_waveforms( {waveforms[0, :, :]}')
         return waveforms
     
     @property
@@ -1365,7 +1390,7 @@ class RippleTriggerAccumulator(TriggerAccumulator):
         # waveforms not cached
         all_peaks = self.all_peaks
         # selected = np.flatnonzero(all_peaks['cluster_label'][self.some_peaks_index]==k).tolist()
-        selected = np.flatnonzero(all_peaks['cluster_label']==k).tolist()
+        selected = np.flatnonzero(all_peaks['cluster_label']==k)
         if selected.size > n_spike_for_centroid:
             keep = np.random.choice(
                 selected.size, n_spike_for_centroid, replace=False)
@@ -1490,12 +1515,10 @@ class RippleCatalogueController(ControllerBase):
         for k in list(self.cluster_visible.keys()):
             if k not in self.cluster_labels and k>=0:
                 self.cluster_visible.pop(k)
-        
         if labelcodes.LABEL_NOISE not in self.cluster_visible:
             #~ print('self.cluster_visible[labelcodes.LABEL_NOISE] = True')
             self.cluster_visible[labelcodes.LABEL_NOISE] = False
-
-        self.refresh_colors(reset=False)
+        # self.refresh_colors(reset=False)
         self.do_cluster_count()
     
     def do_cluster_count(self):
@@ -1695,6 +1718,8 @@ class RippleTriggeredWindow(QT.QMainWindow):
         self.speed = 1. #  Hz
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
+        for w in self.controller.views:
+            self.timer.timeout.connect(w.refresh)
 
     def start_refresh(self):
         self.timer.start()
@@ -1723,11 +1748,13 @@ class RippleTriggeredWindow(QT.QMainWindow):
     
     def refresh(self):
         self.controller.check_plot_attributes()
+        '''
         for w in self.controller.views:
             #TODO refresh only visible but need catch on visibility changed
             #~ print(w)
             #~ t1 = time.perf_counter()
             w.refresh()
+            '''
 
     def closeEvent(self, event):
         self.timer.stop()
