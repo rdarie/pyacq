@@ -15,7 +15,7 @@ from .arraytools import fix_struct_dtype, make_dtype
 import pdb
 import logging
 
-LOGGING = True
+LOGGING = False
 logger = logging.getLogger(__name__)
 
 default_stream = dict(

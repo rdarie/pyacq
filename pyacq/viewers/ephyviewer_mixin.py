@@ -460,8 +460,8 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource, QT.QObject):
         return self.input.buffer.shape[0]
 
     def get_chunk(self, i_start=None, i_stop=None):
-        if LOGGING:
-            logger.info(f"{self.input.name: >10}-buf[{id(self.input.buffer):X}].get_data(dsize={i_stop - i_start})")
+        # if LOGGING:
+        #     logger.info(f"{self.input.name: >10}-buf[{id(self.input.buffer):X}].get_data(dsize={i_stop - i_start})")
         sig_chunk = self.input.get_data(
             i_start, i_stop,
             copy=self.get_with_copy, join=self.get_with_join)
@@ -1166,8 +1166,8 @@ class RippleTriggerAccumulator(TriggerAccumulator):
 
     def on_new_trig(self, trig_num, trig_indexes):
         # print(f'on_new_trig {trig_indexes}')
-        if LOGGING:
-            logger.info(f'on_new_trig: {trig_indexes}')
+        # if LOGGING:
+        #     logger.info(f'on_new_trig: {trig_indexes}')
         # add to all_peaks
         adj_index = (
             trig_indexes[self.events_dtype_field].flatten() / self.nip_sample_period).astype('int64')
@@ -1183,8 +1183,8 @@ class RippleTriggerAccumulator(TriggerAccumulator):
         # print(f'self._all_peaks_buffer.new_chunk(); self._all_peaks_buffer.index() = {self._all_peaks_buffer.index()}')
                     
     def on_limit_reached(self, limit_index):
-        if LOGGING:
-            logger.info(f'on limit reached: {limit_index-self.size}:{limit_index}')
+        # if LOGGING:
+        #     logger.info(f'on limit reached: {limit_index-self.size}:{limit_index}')
         # arr = self.inputs['signals'].get_data(limit_index-self.size, limit_index)
         arr = self.get_signals_chunk(i_start=limit_index-self.size, i_stop=limit_index)
         if arr is not None:
@@ -1317,12 +1317,12 @@ class RippleTriggerAccumulator(TriggerAccumulator):
             channel_indexes = slice(None)
         #
         if peaks_index is None:
-            print(f'get_some_waveforms( peak_sample_indexes = {peak_sample_indexes}')
+            # print(f'get_some_waveforms( peak_sample_indexes = {peak_sample_indexes}')
             assert peak_sample_indexes is not None, 'Provide sample_indexes'
             peaks_index = np.flatnonzero(np.isin(self.all_peaks['index'], peak_sample_indexes))
         # import pdb; pdb.set_trace()
         # peaks_index = self.params['stack_size'] - peaks_index - 1
-        print(f'get_some_waveforms( peaks_index = {peaks_index}')
+        # print(f'get_some_waveforms( peaks_index = {peaks_index}')
         '''
         with self.stack_lock:
             waveforms = self.stack[:, :, channel_indexes]
@@ -1342,7 +1342,7 @@ class RippleTriggerAccumulator(TriggerAccumulator):
             for idx, pk_index in enumerate(peaks_index):
                 waveforms_flat = self.stack.get_data(start=pk_index + first, stop=pk_index + first + 1, copy=True, join=True)
                 waveforms[idx, :, :] = waveforms_flat.reshape(self.limit2-self.limit1, self.nb_channel)
-        print(f'get_some_waveforms( {waveforms[0, :, :]}')
+        # print(f'get_some_waveforms( {waveforms[0, :, :]}')
         return waveforms
     
     @property
@@ -1372,7 +1372,7 @@ class RippleTriggerAccumulator(TriggerAccumulator):
         return ind
 
     def recalc_cluster_info(self):
-        print(f'self.centroids_median = {self.centroids_median}')
+        # print(f'self.centroids_median = {self.centroids_median}')
         pass
 
     def compute_one_centroid(
@@ -1500,7 +1500,7 @@ class RippleCatalogueController(ControllerBase):
         self.init_plot_attributes()
 
     def init_plot_attributes(self):
-        self.cluster_visible = {k:False for i, k  in enumerate(self.cluster_labels)}
+        self.cluster_visible = {k: True for i, k  in enumerate(self.cluster_labels)}
         self.do_cluster_count()
         self.spike_selection = np.zeros(self.dataio.nb_peak, dtype='bool')
         self.spike_visible = np.ones(self.dataio.nb_peak, dtype='bool')
@@ -1515,10 +1515,14 @@ class RippleCatalogueController(ControllerBase):
         for k in list(self.cluster_visible.keys()):
             if k not in self.cluster_labels and k>=0:
                 self.cluster_visible.pop(k)
-        if labelcodes.LABEL_NOISE not in self.cluster_visible:
-            #~ print('self.cluster_visible[labelcodes.LABEL_NOISE] = True')
-            self.cluster_visible[labelcodes.LABEL_NOISE] = False
-        # self.refresh_colors(reset=False)
+        for code in [
+            labelcodes.LABEL_TRASH, labelcodes.LABEL_NOISE, 
+            labelcodes.LABEL_ALIEN, labelcodes.LABEL_UNCLASSIFIED,
+            labelcodes.LABEL_NO_WAVEFORM]:
+                if code not in self.cluster_visible:
+                    #~ print('self.cluster_visible[labelcodes.LABEL_NOISE] = True')
+                    self.cluster_visible[labelcodes.LABEL_NOISE] = False
+        self.refresh_colors(reset=False)
         self.do_cluster_count()
     
     def do_cluster_count(self):
@@ -1671,7 +1675,8 @@ class RippleTriggeredWindow(QT.QMainWindow):
 
         self.dataio = dataio
         self.controller = RippleCatalogueController(dataio=dataio)
-
+        self.thread = QT.QThread(parent=self)
+        self.controller.moveToThread(self.thread)
         # self.traceviewer = CatalogueTraceViewer(controller=self.controller)
         self.peaklist = PeakList(controller=self.controller)
         self.clusterlist = ClusterPeakList(controller=self.controller)
@@ -1715,14 +1720,15 @@ class RippleTriggeredWindow(QT.QMainWindow):
         self.create_actions()
         self.create_toolbar()
 
-        self.speed = 1. #  Hz
+        self.speed = 2. #  Hz
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
         for w in self.controller.views:
-            self.timer.timeout.connect(w.refresh)
+            self.timer.timeout.connect(w.refresh, QT.BlockingQueuedConnection)
 
     def start_refresh(self):
         self.timer.start()
+        self.thread.start()
         pass
         
     def create_actions(self):
@@ -1747,7 +1753,7 @@ class RippleTriggeredWindow(QT.QMainWindow):
         self.refresh()
     
     def refresh(self):
-        self.controller.check_plot_attributes()
+        # self.controller.check_plot_attributes()
         '''
         for w in self.controller.views:
             #TODO refresh only visible but need catch on visibility changed
@@ -1755,9 +1761,12 @@ class RippleTriggeredWindow(QT.QMainWindow):
             #~ t1 = time.perf_counter()
             w.refresh()
             '''
+        pass
 
     def closeEvent(self, event):
         self.timer.stop()
+        self.thread.quit()
+        self.thread.wait()
         self.controller.dataio.stop()
         self.controller.dataio.close()
         event.accept()
