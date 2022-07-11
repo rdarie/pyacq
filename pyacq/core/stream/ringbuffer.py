@@ -54,7 +54,7 @@ class RingBuffer:
             self._shmem = None
             self.shm_id = None
         else:
-            size = np.product(shape) * make_dtype(dtype).itemsize + 16
+            size = int(np.product(shape) * make_dtype(dtype).itemsize + 16)
             if shmem is True:
                 # create new shared memory buffer
                 self._shmem = SharedMem(nbytes=size)

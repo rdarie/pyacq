@@ -27,16 +27,17 @@ except ImportError as error:
         'spk': None,
         'stim': None
         }
+from pyacq.viewers.ephyviewer_mixin import (InputStreamAnalogSignalSource, InputStreamEventAndEpochSource)
 import numpy as np
 from scipy import signal
 import time
 from copy import copy, deepcopy
-from ..core import Node, register_node_type
-from ..core.tools import ThreadPollInput, weakref, make_dtype
-from pyqtgraph.Qt import QtCore # , QtGui
+from pyacq.core import Node, RPCClient, register_node_type
+from pyacq.core.tools import ThreadPollInput, weakref, make_dtype
+from ephyviewer.myqt import QT, QT_LIB
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
-from datetime import datetime as dt
+
 
 import array
 import ctypes
@@ -424,16 +425,139 @@ class XipppyTxBuffer(Node):
         self.xp._close()
 
 
+class XipppyRxBuffer(Node):
+    """
+    A buffer for data streamed from a Ripple NIP via xipppy.
+    """
+    _output_specs = {
+        signalType: {
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
+            'sample_rate': ripple_sample_rates[signalType],
+            'nip_sample_period': ripple_nip_sample_periods[signalType],
+            'compression': '', 'fill': ripple_analogsignal_filler}
+        for signalType in ripple_analogsignal_types
+        }
+    _output_specs.update({
+        'stim': {
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
+            'fill': ripple_event_filler, 'buffer_size': 10000, 'dtype': _dtype_segmentDataPacket},
+        # 'spk': {
+        #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
+            })
+    _input_specs = {
+        signalType: {
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
+            'sample_rate': ripple_sample_rates[signalType],
+            'nip_sample_period': ripple_nip_sample_periods[signalType],
+            'fill': ripple_analogsignal_filler}
+        for signalType in ripple_analogsignal_types
+        }
+    _input_specs.update({
+        'stim': {
+            'streamtype': 'event', 'shape': (-1,), 'sorted_by_time': sortEventOutputs,
+            'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
+        # 'spk': {
+        #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
+            })
+
+    def __init__(
+            self, requested_signal_types=None,
+            **kargs):
+        if requested_signal_types is None:
+            self.requested_signal_types = ripple_signal_types
+        else:
+            self.requested_signal_types = requested_signal_types
+        self.requested_analogsignal_types = [
+            sig_type for sig_type in self.requested_signal_types
+            if sig_type in ripple_analogsignal_types
+            ]
+        self.requested_event_types = [
+            sig_type for sig_type in self.requested_signal_types
+            if sig_type in ripple_event_types
+            ]
+        self.nb_channel = {}
+        self.sources = {}
+        self.pollers = {}
+        self.source_threads = {}
+        Node.__init__(self, **kargs)
+        
+    def _configure(self):
+        pass
+
+    def _check_nb_channel(self):
+        for inputname in self.requested_signal_types:
+            self.nb_channel[inputname] = self.inputs[inputname].params['nb_channel']
+            # print('self.nb_channel[{}] = {}'.format(inputname, self.nb_channel[inputname]))
+
+    def _initialize(self):
+        self._check_nb_channel()
+        for inputname in self.requested_analogsignal_types:
+            if self.nb_channel[inputname] > 0:
+                # set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None)
+                bufferParams = {
+                    key: self.inputs[inputname].params[key] for key in ['double', 'axisorder', 'fill']}
+                bufferParams['size'] = self.inputs[inputname].params['buffer_size']
+                if (self.inputs[inputname].params['transfermode'] == 'sharedmem'):
+                    if 'shm_id' in self.inputs[inputname].params:
+                        bufferParams['shmem'] = self.inputs[inputname].params['shm_id']
+                    else:
+                        bufferParams['shmem'] = True
+                else:
+                    bufferParams['shmem'] = None
+                self.inputs[inputname].set_buffer(**bufferParams)
+                self.sources[inputname] = InputStreamAnalogSignalSource(self.inputs[inputname])
+                #
+                thread = QT.QThread()
+                self.source_threads[inputname] = thread
+                self.sources[inputname].moveToThread(thread)
+                # 
+                self.pollers[inputname] = ThreadPollInput(self.inputs[inputname])
+                # self.pollers[inputname].new_data.connect(self.analogsignal_received)
+        for inputname in self.requested_event_types:
+            # no need for a buffer, will split by channel
+            self.sources[inputname] = InputStreamEventAndEpochSource(self.inputs[inputname])
+            thread = QT.QThread()
+            self.source_threads[inputname] = thread
+            self.sources[inputname].moveToThread(thread)
+            self.pollers[inputname] = ThreadPollInput(self.inputs[inputname], return_data=True)
+            self.pollers[inputname].new_data.connect(self.sources[inputname].event_received)
+    
+    def _start(self):
+        for inputname, poller in self.pollers.items():
+            poller.start()
+            self.source_threads[inputname].start()
+
+    def _stop(self):
+        for inputname, poller in self.pollers.items():
+            poller.stop()
+            poller.wait()
+            self.source_threads[inputname].stop()
+            self.source_threads[inputname].wait()
+    
+    def _close(self):
+        for inputname in self.requested_event_types:
+            source = self.sources[inputname]
+            for buffer in source.buffers_by_channel:
+                if buffer.shm_id is not None:
+                    self.buffer._shm.close()
+        if self.running():
+            self.stop()
+
+    def analogsignal_received(self, ptr, data):
+        print(f"Analog signal data received: {ptr} {data}")
+        return
+
+
 def _spikeKeyExtractor(pair):
     # pair = (chanIdx, segmentDataPacket)
     return pair[1].timestamp
 
-class XipppyThread(QtCore.QThread):
+class XipppyThread(QT.QThread):
     """
     Xipppy thread that samples data every sample_interval.
     """
     def __init__(self, node, parent=None):
-        QtCore.QThread.__init__(self, parent=parent)
+        QT.QThread.__init__(self, parent=parent)
         #
         self.lock = Mutex()
         self.running = False
@@ -673,3 +797,22 @@ class RippleStreamAdapter(Node):
         pass
 
 register_node_type(RippleStreamAdapter)
+
+class XippyServerWindow(QT.QMainWindow):
+    '''  '''
+
+    def __init__(
+            self, server=None, parent=None):
+        QT.QMainWindow.__init__(self, parent)
+        self.server = server
+        self.client = None
+        self.setWindowTitle('xipppy server')
+
+    def start(self):
+        self.server.run_forever()
+        self.client = RPCClient.get_client(self.server.address)
+
+    def closeEvent(self, event):
+        if self.client is not None:
+            self.client.close_server()
+        event.accept()

@@ -9,14 +9,16 @@ import numpy as np
 
 
 from .qoscilloscope import BaseOscilloscope, OscilloscopeController
-from ..core import (register_node_type,  StreamConverter)
-from ..dsp import AnalogTrigger, DigitalTrigger, TriggerAccumulator
+from pyacq.core import (register_node_type,  StreamConverter)
+from pyacq.dsp import AnalogTrigger, DigitalTrigger, TriggerAccumulator
 
-from ..devices.ripple import (
+
+'''
+from pyacq.devices.ripple import (
     ripple_nip_sample_periods, ripple_analogsignal_filler, sortEventOutputs,
     ripple_analogsignal_types, ripple_event_types, ripple_signal_types, ripple_sample_rates,
     _dtype_analogsignal, _dtype_segmentDataPacket, ripple_event_filler)
-
+'''
 
 class TriggeredOscilloscopeController(OscilloscopeController):
     def __init__(self, parent=None, viewer=None):

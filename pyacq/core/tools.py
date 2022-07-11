@@ -46,6 +46,7 @@ class ThreadPollInput(QtCore.QThread):
     
     The `process_data()` method may be reimplemented to define other behaviors.
     """
+    
     new_data = QtCore.Signal(int, object)
     
     def __init__(
