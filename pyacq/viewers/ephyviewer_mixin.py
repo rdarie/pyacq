@@ -8,6 +8,7 @@ from collections import OrderedDict
 from ephyviewer.myqt import QT, QT_LIB
 
 import pyqtgraph as pg
+from pyqtgraph.util.mutex import Mutex
 import logging
 import time
 import atexit
@@ -702,8 +703,6 @@ class NodeMainViewer(MainViewer):
         self.source_sample_rate = None
         self.source_buffer_dur = None
         self.t_head = None
-        if time_reference_source is not None:
-            self.set_time_reference_source(time_reference_source)
         #
         if speed is not None:
             self.speed = speed
@@ -711,8 +710,7 @@ class NodeMainViewer(MainViewer):
             self.speed = 1.
             
         QT.QMainWindow.__init__(self, parent)
-        #TODO settings
-        #http://www.programcreek.com/python/example/86789/PyQt5.QtCore.QSettings
+
         self.debug = debug
         self.settings_name = settings_name
         if self.settings_name is not None:
@@ -738,21 +736,21 @@ class NodeMainViewer(MainViewer):
         dock.setTitleBarWidget(QT.QWidget())  # hide the widget title bar
         dock.setFeatures(QT.DockWidget.NoDockWidgetFeatures)  # prevent accidental movement and undockingx
         self.addDockWidget(QT.TopDockWidgetArea, dock)
-
+        #
         self.navigation_toolbar.speedSpin.setValue(self.speed)
         self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
         self.timer.timeout.connect(self.refresh)
         self.threads.append(self.timer)
-
+        #
         self.autoscale_timer = QT.QTimer(
-            interval=int(1000 * self.xsize), singleShot=True)
+            interval=int(1000 * 1.2 * self.xsize), singleShot=True)
         self.autoscale_timer.timeout.connect(
             self.navigation_toolbar.auto_scale)
-
+        #
         self.t_refresh = 0.
         self.last_t_refresh = -1.
         self.refresh_enabled = True
-
+        #
         self.navigation_toolbar.time_changed.connect(self.on_time_changed)
         self.navigation_toolbar.xsize_changed.connect(self.on_xsize_changed)
         # self.navigation_toolbar.auto_scale_requested.connect(self.auto_scale)
@@ -760,6 +758,9 @@ class NodeMainViewer(MainViewer):
         self.navigation_toolbar.play_pause_signal.connect(self.set_refresh_enable)
         self.load_one_setting('navigation_toolbar', self.navigation_toolbar)
         # 
+        if time_reference_source is not None:
+            self.set_time_reference_source(time_reference_source)
+        #
         self.setWindowTitle(self.window_title)
 
     def set_refresh_enable(self, value):
@@ -784,9 +785,9 @@ class NodeMainViewer(MainViewer):
         **kwargs):
         MainViewer.add_view(self, widget, **kwargs)
         if connect_seek_time:
-            widget.connect_to_seek(self.seek_time)
+            self.seek_time.connect(widget.seek)
         return
-        
+
     def reset_navbar_bounds(self, t_max):
         nav_t_start = min(
             self.navigation_toolbar.t_start,
@@ -849,11 +850,11 @@ class RefreshTimer(QT.QThread):
         #
         self.verbose = verbose
         self.interval = interval
-        self.node = weakref.ref(node)
         self.setObjectName(f'RefreshTimer_')
         #
-        self.mutex = QT.QMutex()
-        self.lock = QT.QMutexLocker(self.mutex)
+        # self.mutex = QT.QMutex()
+        # self.lock = QT.QMutexLocker(self.mutex)
+        self.lock = Mutex()
         self.running = False
         self.is_disabled = False
         atexit.register(self.stop)
@@ -885,6 +886,74 @@ class RefreshTimer(QT.QThread):
     def set_interval(self, interval):
         with self.lock:
             self.interval = interval
+
+    def disable(self):
+        with self.lock:
+            self.is_disabled = True
+
+    def enable(self):
+        with self.lock:
+            self.is_disabled = False
+
+    def stop(self):
+        with self.lock:
+            self.running = False
+
+
+class SeekTimer(QT.QThread):
+    timeout = QT.pyqtSignal(float)
+    
+    def __init__(
+            self,
+            interval=100e-3, node=None,
+            verbose=False, parent=None):
+        QT.QThread.__init__(self, parent)
+        #
+        self.verbose = verbose
+        self.interval = interval
+        self.setObjectName(f'SeekTimer_')
+        self.t = None
+        self.lock = Mutex()
+        self.running = False
+        self.is_disabled = False
+        atexit.register(self.stop)
+        #
+
+    def run(self):
+        with self.lock:
+            self.running = True
+            interval = self.interval
+            is_disabled = self.is_disabled
+            t = self.t
+        next_time = time.perf_counter() + interval
+        while True:
+            # print('RefreshTimer: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
+            time.sleep(max(0, next_time - time.perf_counter()))
+            #
+            with self.lock:
+                is_disabled = self.is_disabled
+                t = self.t
+            #
+            if not is_disabled:
+                self.timeout.emit(t)
+            # print('t={:.3f} RefreshViewer timeout()'.format(time.perf_counter()))
+            # check the interval, in case it has changed
+            with self.lock:
+                interval = self.interval
+                running = self.running
+            if not running:
+                break
+            # skip tasks if we are behind schedule:
+            next_time += (time.perf_counter() - next_time) // interval * interval + interval
+        return
+
+    def set_interval(self, interval):
+        with self.lock:
+            self.interval = interval
+
+    def set_t(self, t):
+        with self.lock:
+            self.t = t
 
     def disable(self):
         with self.lock:
