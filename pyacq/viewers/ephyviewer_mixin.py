@@ -486,16 +486,15 @@ class NodeNavigationToolbar(NavigationToolBar):
         self.datetime0 = datetime0
         self.datetime_format = datetime_format
 
+        self.mainviewer = None
+        
         if show_scroll_time:
             #~ self.slider = QSlider()
             self.scroll_time = QT.QScrollBar(
                 orientation=orientation_to_qt['horizontal'],
                 minimum=0, maximum=1000)
             self.mainlayout.addWidget(self.scroll_time)
-            if not self.get_playing():
-                # do not connect this if it will play by default
-                self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
-
+            #
             #TODO min/max/step
             #~ self.scroll_time.valueChanged.disconnect(self.on_scroll_time_changed)
             #~ self.scroll_time.setValue(int(sr*t))
@@ -503,6 +502,10 @@ class NodeNavigationToolbar(NavigationToolBar):
             #~ self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
             #~ self.scroll_time.setMinimum(0)
             #~ self.scroll_time.setMaximum(length)
+            #
+            if not self.get_playing():
+                # do not connect this if it will play by default
+                self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
 
         h = QT.QHBoxLayout()
         h.addStretch()
@@ -612,10 +615,37 @@ class NodeNavigationToolbar(NavigationToolBar):
             but.clicked.connect(self.auto_scale_requested.emit)
             #~ h.addWidget(QT.QFrame(frameShape=QT.QFrame.VLine, frameShadow=QT.QFrame.Sunken))
         h.addStretch()
-
         # all in s
-        self.t = 0 #  s
-        self.set_start_stop(0., 0.1)
+        self.t = 0.03 #  s
+        self.set_start_stop(0., 0.09)
+
+    def update_t_head(self, ptr, data):
+        t_head = ptr / self.mainviewer.source_sample_rate
+        '''
+        new_t_start = min(self.t_start, t_head - self.source_buffer_dur)
+        new_t_stop = max(self.t_stop, t_head)
+        self.set_start_stop(new_t_start, new_t_stop, seek=False)
+        '''
+        self.t_start = t_head - self.mainviewer.source_buffer_dur
+        self.t_stop = t_head
+
+        if self.get_playing():
+            self.t = t_head - self.mainviewer.xsize * (1 - self.mainviewer.xratio)
+            self.time_label.setText(f'Time: {self.t:.3f} sec')
+            if self.show_scroll_time:
+                pos = int((self.t - self.t_start)/(self.t_stop - self.t_start)*1000.)
+                self.scroll_time.setValue(pos)
+            '''
+            if self.show_spinbox:
+                self.spinbox_time.setValue(self.t)
+                '''
+        else:
+            # if not playing, at least update the spinbox bounds
+            if self.show_spinbox:
+                self.spinbox_time.setMinimum(self.t_start)
+                self.spinbox_time.setMaximum(self.t_stop)
+
+        return
 
     def on_play(self):
         # if play is currently disabled, we are starting it;
@@ -630,7 +660,12 @@ class NodeNavigationToolbar(NavigationToolBar):
         # if play is currently enabled, we are stopping it;
         # connect these
         if self.get_playing():
-            self.spinbox_time.valueChanged.connect(self.on_spinbox_time_changed)
+            if self.show_spinbox:
+                self.t = self.t_stop - self.mainviewer.xsize * (1 - self.mainviewer.xratio)
+                self.spinbox_time.setMinimum(self.t_start)
+                self.spinbox_time.setMaximum(self.t_stop)
+                self.spinbox_time.setValue(self.t)
+                self.spinbox_time.valueChanged.connect(self.on_spinbox_time_changed)
             self.scroll_time.valueChanged.connect(self.on_scroll_time_changed)
             self.set_playing(False)
             self.play_pause_signal.emit(False)
@@ -644,19 +679,22 @@ class NodeNavigationToolbar(NavigationToolBar):
     def seek(
             self, t, refresh_scroll=True,
             refresh_spinbox=True, emit=True):
+        
         self.t = t
         if (self.t < self.t_start):
             self.t = self.t_start
         if (self.t > self.t_stop):
             self.t = self.t_stop
 
-        self.time_label.setText(f'Time: {t:.3f} sec')
+        self.time_label.setText(f'Time: {self.t:.3f} sec')
 
         if refresh_scroll and self.show_scroll_time:
             if not self.get_playing():
                 self.scroll_time.blockSignals(True)
+            
             pos = int((self.t - self.t_start)/(self.t_stop - self.t_start)*1000.)
             self.scroll_time.setValue(pos)
+
             if not self.get_playing():
                 self.scroll_time.blockSignals(False)
             
@@ -684,6 +722,7 @@ class NodeNavigationToolbar(NavigationToolBar):
         #~ print('on_xsize_changed', xsize)
         self.auto_scale_requested.emit()
         return
+        
 
 
 class NodeMainViewer(MainViewer):
@@ -702,7 +741,7 @@ class NodeMainViewer(MainViewer):
         self.time_reference_source = None
         self.source_sample_rate = None
         self.source_buffer_dur = None
-        self.t_head = None
+        # self.t_head = None
         #
         if speed is not None:
             self.speed = speed
@@ -727,8 +766,9 @@ class NodeMainViewer(MainViewer):
         
         navParams = defaultNavParams.copy()
         navParams.update(navigation_params)
-        #~print(navParams)
+        
         self.navigation_toolbar = NodeNavigationToolbar(**navParams)
+        self.navigation_toolbar.mainviewer = self
 
         dock = self.navigation_dock = QT.QDockWidget('navigation', self)
         dock.setObjectName('navigation')
@@ -738,8 +778,9 @@ class NodeMainViewer(MainViewer):
         self.addDockWidget(QT.TopDockWidgetArea, dock)
         #
         self.navigation_toolbar.speedSpin.setValue(self.speed)
-        self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
-        self.timer.timeout.connect(self.refresh)
+        # self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
+        self.timer = SeekTimer(interval=self.speed ** -1, node=self)
+        # self.timer.timeout.connect(self.refresh)
         self.threads.append(self.timer)
         #
         self.autoscale_timer = QT.QTimer(
@@ -755,20 +796,17 @@ class NodeMainViewer(MainViewer):
         self.navigation_toolbar.xsize_changed.connect(self.on_xsize_changed)
         # self.navigation_toolbar.auto_scale_requested.connect(self.auto_scale)
         self.navigation_toolbar.speedSpin.valueChanged.connect(self.on_change_speed)
-        self.navigation_toolbar.play_pause_signal.connect(self.set_refresh_enable)
+        # self.navigation_toolbar.play_pause_signal.connect(self.set_refresh_enable)
         self.load_one_setting('navigation_toolbar', self.navigation_toolbar)
-        # 
+        #
         if time_reference_source is not None:
             self.set_time_reference_source(time_reference_source)
+        self.navigation_toolbar.play_pause_signal.connect(self.timer.set_enable)
         #
         self.setWindowTitle(self.window_title)
 
     def set_refresh_enable(self, value):
         self.refresh_enabled = value
-        # print(f'mainviewer.refresh_enabled = {value}')
-
-    def update_t_head(self, ptr, data):
-        self.t_head = ptr / self.source_sample_rate
         return
 
     def set_time_reference_source(self, source):
@@ -776,8 +814,13 @@ class NodeMainViewer(MainViewer):
         stream_name = source.input.name
         self.source_sample_rate = source.sample_rate
         self.source_buffer_dur = source.signals.shape[0] / source.sample_rate
+        #
+        self.timer.source_sample_rate = self.source_sample_rate
+        #
         poller = self.node.pollers[stream_name]
-        poller.new_data.connect(self.update_t_head)
+        poller.new_data.connect(self.timer.update_t_head)
+        poller.new_data.connect(self.navigation_toolbar.update_t_head)
+        #
         self.time_reference_source = source
 
     def add_view(
@@ -785,48 +828,22 @@ class NodeMainViewer(MainViewer):
         **kwargs):
         MainViewer.add_view(self, widget, **kwargs)
         if connect_seek_time:
-            self.seek_time.connect(widget.seek)
+            self.timer.timeout.connect(widget.seek_head) # , QT.BlockingQueuedConnection
+            # self.seek_time.connect(widget.seek)
         return
-
-    def reset_navbar_bounds(self, t_max):
-        nav_t_start = min(
-            self.navigation_toolbar.t_start,
-            t_max - self.source_buffer_dur)
-        nav_t_stop = max(
-            self.navigation_toolbar.t_stop,
-            t_max)
-        self.navigation_toolbar.set_start_stop(
-            nav_t_start, nav_t_stop, seek=False)
-
-    def refresh(self):
-        if self.t_head is not None:
-            t_max = self.t_head
-            if self.refresh_enabled:
-                if self.navigation_toolbar.get_playing():
-                    self.t_refresh = t_max - self.xsize * (1 - self.xratio)
-                else:
-                    self.t_refresh = self.navigation_toolbar.t
-                if self.t_refresh != self.last_t_refresh:
-                    self.seek_time.emit(self.t_refresh)
-                    #
-                    if self.navigation_toolbar.get_playing():
-                        self.navigation_toolbar.seek(
-                            self.t_refresh, refresh_spinbox=False, emit=False)
-            self.reset_navbar_bounds(t_max)
-            self.last_t_refresh = self.t_refresh
 
     def on_change_speed(self, speed):
         self.speed = speed
         self.timer.set_interval(speed ** -1)
 
     def start_viewers(self):
+        self.showMaximized()
         for _, d in self.viewers.items():
             if hasattr(d['widget'], 'start_threads'):
                 d['widget'].start_threads()
-        self.timer.start()
-        self.showMaximized()
-        ##
         self.autoscale_timer.start()
+        self.timer.start()
+        ##
         return
 
     def closeEvent(self, event):
@@ -912,19 +929,47 @@ class SeekTimer(QT.QThread):
         self.verbose = verbose
         self.interval = interval
         self.setObjectName(f'SeekTimer_')
-        self.t = None
+        #
+        self.source_sample_rate = None
+        self.t_head = 0.
+        self.last_t_head = -1.
+        #
         self.lock = Mutex()
         self.running = False
         self.is_disabled = False
         atexit.register(self.stop)
         #
 
+    def set_interval(self, interval):
+        with self.lock:
+            self.interval = interval
+
+    def disable(self):
+        with self.lock:
+            self.is_disabled = True
+
+    def enable(self):
+        with self.lock:
+            self.is_disabled = False
+
+    def set_enable(self, new_value):
+        with self.lock:
+            self.is_disabled = not new_value
+        return
+
+    def update_t_head(self, ptr, data):
+        new_t_head = ptr / self.source_sample_rate
+        with self.lock:
+            self.t_head = new_t_head
+        return
+
     def run(self):
         with self.lock:
             self.running = True
             interval = self.interval
             is_disabled = self.is_disabled
-            t = self.t
+            t_head = self.t_head
+
         next_time = time.perf_counter() + interval
         while True:
             # print('RefreshTimer: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
@@ -932,10 +977,19 @@ class SeekTimer(QT.QThread):
             #
             with self.lock:
                 is_disabled = self.is_disabled
-                t = self.t
-            #
-            if not is_disabled:
-                self.timeout.emit(t)
+                t_head = self.t_head
+            repeated_t_head = (t_head == self.last_t_head)
+            if not (is_disabled or (t_head == 0) or repeated_t_head):
+                if LOGGING:
+                    logger.info(f"SeekTimer.timeout.emit({t_head:.3f})")
+                self.timeout.emit(t_head)
+                self.last_t_head = t_head
+            elif is_disabled:
+                if LOGGING:
+                    logger.info(f"SeekTimer disabled")
+            elif repeated_t_head:
+                if LOGGING:
+                    logger.info(f"SeekTimer repeated t_head = {t_head:.3f}")
             # print('t={:.3f} RefreshViewer timeout()'.format(time.perf_counter()))
             # check the interval, in case it has changed
             with self.lock:
@@ -946,22 +1000,6 @@ class SeekTimer(QT.QThread):
             # skip tasks if we are behind schedule:
             next_time += (time.perf_counter() - next_time) // interval * interval + interval
         return
-
-    def set_interval(self, interval):
-        with self.lock:
-            self.interval = interval
-
-    def set_t(self, t):
-        with self.lock:
-            self.t = t
-
-    def disable(self):
-        with self.lock:
-            self.is_disabled = True
-
-    def enable(self):
-        with self.lock:
-            self.is_disabled = False
 
     def stop(self):
         with self.lock:

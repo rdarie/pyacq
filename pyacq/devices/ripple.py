@@ -177,6 +177,7 @@ def dummySpk(t_start, t_stop, max_spk):
         data.append(spk)
     return count, data
 
+
 class DummyXipppy():
     t_zero = time.time()
     _num_elecs = 16
@@ -272,6 +273,7 @@ class DummyXipppy():
         count, data = self.stim_spk_fun(self.last_stim_spk_t[elecs], t_now, max_spk)
         self.last_stim_spk_t[elecs] = t_now
         return count, data
+
 
 class XipppyTxBuffer(Node):
     """
@@ -425,6 +427,9 @@ class XipppyTxBuffer(Node):
         self.xp._close()
 
 
+register_node_type(XipppyTxBuffer)
+
+
 class XipppyRxBuffer(Node):
     """
     A buffer for data streamed from a Ripple NIP via xipppy.
@@ -548,9 +553,12 @@ class XipppyRxBuffer(Node):
         return
 
 
+register_node_type(XipppyRxBuffer)
+
 def _spikeKeyExtractor(pair):
     # pair = (chanIdx, segmentDataPacket)
     return pair[1].timestamp
+
 
 class XipppyThread(QT.QThread):
     """
@@ -710,7 +718,6 @@ class XipppyThread(QT.QThread):
             self.running = False
 
 
-register_node_type(XipppyTxBuffer)
 
 
 class RippleThreadStreamConverter(ThreadPollInput):
@@ -796,7 +803,9 @@ class RippleStreamAdapter(Node):
     def _close(self):
         pass
 
+
 register_node_type(RippleStreamAdapter)
+
 
 class XippyServerWindow(QT.QMainWindow):
     '''  '''
