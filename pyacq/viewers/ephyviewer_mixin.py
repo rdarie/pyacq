@@ -24,7 +24,7 @@ from ephyviewer.navigation import NavigationToolBar
 
 from pyacq.core import (Node, ThreadPollInput, RingBuffer)
 
-LOGGING = True
+LOGGING = False
 logger = logging.getLogger(__name__)
 
 class InputStreamEventAndEpochSourceNode(BaseSpikeSource, Node):
@@ -621,6 +621,8 @@ class NodeNavigationToolbar(NavigationToolBar):
 
     def update_t_head(self, ptr, data):
         t_head = ptr / self.mainviewer.source_sample_rate
+        if LOGGING:
+            logger.info(f"NavigationToolbar.update_t_head({t_head:.3f})")
         '''
         new_t_start = min(self.t_start, t_head - self.source_buffer_dur)
         new_t_stop = max(self.t_stop, t_head)
@@ -779,7 +781,7 @@ class NodeMainViewer(MainViewer):
         #
         self.navigation_toolbar.speedSpin.setValue(self.speed)
         # self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
-        self.timer = SeekTimer(interval=self.speed ** -1, node=self)
+        self.timer = SeekTimer(interval=self.speed ** -1, parent=self)
         # self.timer.timeout.connect(self.refresh)
         self.threads.append(self.timer)
         #
@@ -922,7 +924,7 @@ class SeekTimer(QT.QThread):
     
     def __init__(
             self,
-            interval=100e-3, node=None,
+            interval=100e-3,
             verbose=False, parent=None):
         QT.QThread.__init__(self, parent)
         #
@@ -959,6 +961,8 @@ class SeekTimer(QT.QThread):
 
     def update_t_head(self, ptr, data):
         new_t_head = ptr / self.source_sample_rate
+        if LOGGING:
+            logger.info(f"SeekTimer.update_t_head({new_t_head:.3f})")
         with self.lock:
             self.t_head = new_t_head
         return
