@@ -18,13 +18,13 @@ setup(
     name = "pyacq",
     version = pyacq.__version__,
     packages = [pkg for pkg in find_packages() if pkg.startswith('pyacq')],
-    install_requires=[
-                    'numpy',
-                    'pyzmq',
-                    'pyqtgraph',
-                    #'blosc',  # optional; causes install failure on appveyor
-                    #'msgpack-python',
-                    ],
+    #  install_requires=[
+    #                  'numpy',
+    #                  'pyzmq',
+    #                  'pyqtgraph',
+    #                  #'blosc',  # optional; causes install failure on appveyor
+    #                  #'msgpack-python',
+    #                  ],
     author = "S.Garcia",
     author_email = "sam.garcia.die@gmail.com",
     description = "Simple Framework for data acquisition (signal, video) in pure python.",
