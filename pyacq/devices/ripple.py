@@ -166,10 +166,11 @@ def dummySpk(t_start, t_stop, max_spk):
     emulateSpikeTrain = True
     if emulateSpikeTrain:
         t_start_sec = t_start / ripple_sample_rates['raw']
-        second_offset = t_start_sec - np.floor(t_start_sec)
-        if second_offset > 0.5:
+        seconds_offset = t_start_sec - np.floor(t_start_sec)
+        seconds_digit = np.floor(t_start_sec) - 10 * np.floor(t_start_sec / 10)
+        if (seconds_offset > 0.5) or (seconds_digit != 2):
             return 0, []
-        # print(f'dummySpk, second_offset = {second_offset:.3f}')
+        # print(f'dummySpk, seconds_offset = {seconds_offset:.3f}')
     ####
     count = np.round(
         (spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
