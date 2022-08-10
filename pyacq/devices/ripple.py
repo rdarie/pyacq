@@ -35,6 +35,7 @@ from copy import copy, deepcopy
 from pyacq.core import Node, RPCClient, register_node_type
 from pyacq.core.tools import ThreadPollInput, weakref, make_dtype
 from ephyviewer.myqt import QT, QT_LIB
+from PySide6.QtWebSockets import QWebSocket
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
 
@@ -42,6 +43,7 @@ from contextlib import nullcontext
 import array
 import ctypes
 import itertools
+import json
 
 # Helper types
 class DummySegmentDataPacket:
@@ -160,7 +162,17 @@ rng = np.random.default_rng(12345)
 def dummySpk(t_start, t_stop, max_spk):
     t_interval = t_stop - t_start
     spkFreq = 5 # Hz
-    count = np.round((spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
+    ####
+    emulateSpikeTrain = True
+    if emulateSpikeTrain:
+        t_start_sec = t_start / ripple_sample_rates['raw']
+        second_offset = t_start_sec - np.floor(t_start_sec)
+        if second_offset > 0.5:
+            return 0, []
+        # print(f'dummySpk, second_offset = {second_offset:.3f}')
+    ####
+    count = np.round(
+        (spkFreq * t_interval / 3e4) * (1 + (rng.random() - 0.5) / 10.)).astype('int')
     if count == 0:
         return 0, []
     timestamps = rng.random((count+2,))
@@ -718,8 +730,6 @@ class XipppyThread(QT.QThread):
             self.running = False
 
 
-
-
 class RippleThreadStreamConverter(ThreadPollInput):
     """Thread that polls for data on an input stream and converts the transfer
     mode or time axis of the data before relaying it through its output.
@@ -807,15 +817,15 @@ class RippleStreamAdapter(Node):
 register_node_type(RippleStreamAdapter)
 
 
-class XippyServerWindow(QT.QMainWindow):
+class PyacqServerWindow(QT.QMainWindow):
     '''  '''
 
     def __init__(
-            self, server=None, parent=None):
+            self, server=None, winTitle='server', parent=None):
         QT.QMainWindow.__init__(self, parent)
         self.server = server
         self.client = None
-        self.setWindowTitle('xipppy server')
+        self.setWindowTitle(winTitle)
 
     def start(self):
         self.server.run_forever()
@@ -825,3 +835,112 @@ class XippyServerWindow(QT.QMainWindow):
         if self.client is not None:
             self.client.close_server()
         event.accept()
+
+
+_dtype_stim_packet = [
+    ('elecCath', '8u1'),
+    ('elecAno', '8u1'),
+    ('amp', 'u4'),
+    ('freq', 'u4'),
+    ('pulseWidth', 'u4'),
+    ('isContinuous', 'u1'),
+    ('nipTime', 'u8'),
+    ('time', 'u8'),
+    ('amp_steps', 'u4'),
+    ('stim_res', 'u4')
+    ]
+
+_zero_stim_packet = np.zeros((1,), dtype=_dtype_stim_packet)
+
+def elecListToBinary(elecList):
+    listRaw = [int(idx in elecList) for idx in range(64)]
+    return np.packbits(listRaw)
+
+def binaryToElecList(elecBinary):
+    unpacked = np.unpackbits(elecBinary)
+    return np.flatnonzero(unpacked).tolist()
+
+
+class StimPacketReceiver(Node):
+    _output_specs = {
+        'stim_packets': dict(
+            streamtype='event', dtype=_dtype_stim_packet, shape=(-1,),
+            buffer_size=10000
+            ),
+        }
+
+    def __init__(self, **kargs):
+        Node.__init__(self, **kargs)
+        self.verbose = False
+
+    def _configure(
+            self, server_ip='192.168.42.1', server_port=7890,
+            verbose=False):
+        '''
+        Parameters
+        ----------
+        server_ip : str
+            address used to receive data
+        server_port : int
+            server_port used to receive data
+        '''
+
+        self.server_ip = server_ip
+        self.server_port = server_port
+        self.url = f"ws://{server_ip}:{server_port}"
+
+        self.client_id = 1
+
+        self.verbose = verbose
+
+    def _initialize(self):
+        self.websocket = QWebSocket()
+        self.websocket.open(self.url)
+        self.websocket.textMessageReceived.connect(self.handle_text_message_received)
+
+    def _start(self):
+        pass
+
+    def _stop(self):
+        pass
+
+    def _close(self):
+        if self.verbose:
+            print('closing websocket')
+        self.websocket.close()
+
+    def handle_text_message_received(self, message):
+        if self.verbose:
+            print(message)
+        if message == "ID_REQ":
+            reply = f"{self.client_id}"
+            ret = self.websocket.sendTextMessage(reply)
+            if self.verbose:
+                print(f"reply = {reply}; ret = {ret}")
+            reply = "hello"
+            ret = self.websocket.sendTextMessage(reply)
+            if self.verbose:
+                print(f"reply = {reply}; ret = {ret}")
+        elif message == "hello":
+            if self.verbose:
+                print('the server replied to our handshake!')
+        else:
+            try:
+                json_log_entry = json.loads(message)
+                if self.verbose:
+                    print(f'decoded as: {json_log_entry}')
+                if json_log_entry['msg_type'] == 'stim_ack_json':
+                    stim_ack = json.loads(json_log_entry['msg'])
+                    stim_packet = np.empty((1,), dtype=_dtype_stim_packet)
+                    for key, value in stim_ack.items():
+                        if key in ['elecCath', 'elecAno']:
+                            stim_packet[key] = elecListToBinary(value)
+                        else:
+                            stim_packet[key] = value
+                    self.outputs['stim_packets'].send(stim_packet)
+                    if self.verbose:
+                        print(f'StimPacketReceiver: sent {stim_packet}')
+            except Exception:
+                traceback.print_exc()
+
+register_node_type(StimPacketReceiver)

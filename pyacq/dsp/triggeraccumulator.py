@@ -133,7 +133,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
         self.limit_poller.limit_reached.connect(self.on_limit_reached)
         
         self.wait_thread_list = []
-        self.recreate_stack()
+        self.remake_stack()
         
     def _start(self):
         self.trig_poller.start()
@@ -154,7 +154,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
         for param, change, data in changes:
             if change != 'value': continue
             if param.name() in ['stack_size', 'left_sweep', 'right_sweep']:
-                self.recreate_stack()
+                self.remake_stack()
         self.params.param('left_sweep').setLimits([-np.inf, self.params['right_sweep']])
 
 
@@ -180,7 +180,7 @@ class TriggerAccumulator(Node, QtCore.QObject):
             
             self.new_chunk.emit(self.total_trig)
 
-    def recreate_stack(self):
+    def remake_stack(self):
         self.limit1 = l1 = int(self.params['left_sweep'] * self.sample_rate)
         self.limit2 = l2 = int(self.params['right_sweep'] * self.sample_rate)
         self.size = l2 - l1

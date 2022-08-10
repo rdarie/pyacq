@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 #~ from __future__ import (unicode_literals, print_function, division, absolute_import)
 
-from tkinter import N
 import numpy as np
 
 from collections import OrderedDict
@@ -9,17 +8,17 @@ from ephyviewer.myqt import QT, QT_LIB
 
 import pyqtgraph as pg
 from pyqtgraph.util.mutex import Mutex
+
 import logging
 import time
 import atexit
-import weakref
 import sys
 import pdb
 from datetime import datetime
 
 from ephyviewer.datasource import BaseAnalogSignalSource, BaseEventAndEpoch, BaseSpikeSource
 
-from ephyviewer.mainviewer import MainViewer, location_to_qt, orientation_to_qt
+from ephyviewer.mainviewer import MainViewer, orientation_to_qt
 from ephyviewer.navigation import NavigationToolBar
 
 from pyacq.core import (Node, ThreadPollInput, RingBuffer)
@@ -725,7 +724,6 @@ class NodeNavigationToolbar(NavigationToolBar):
         self.auto_scale_requested.emit()
         return
         
-
 
 class NodeMainViewer(MainViewer):
     seek_time = QT.pyqtSignal(float)
