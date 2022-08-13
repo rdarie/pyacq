@@ -163,7 +163,7 @@ class InputStreamEventAndEpochSourceNode(BaseSpikeSource, Node):
             return ev_times, ev_durations, ev_labels
 
 
-class InputStreamAnalogSignalSource(BaseAnalogSignalSource, Node):
+class InputStreamAnalogSignalSourceNode(BaseAnalogSignalSource, Node):
 
     _input_specs = {'in': {}}
     _output_specs = {'out': {}}
@@ -390,6 +390,7 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource, QT.QObject):
         self.get_with_join = get_with_join
         #
         self.has_custom_dtype = self.input.params['dtype'].names is not None
+        print(f"InputStreamAnalogSignalSource: self.has_custom_dtype = {self.has_custom_dtype}")
         self.signals = self.input.buffer
         self.sample_rate = float(self.input.params['sample_rate'])
         self.reference_signal = None

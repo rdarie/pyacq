@@ -340,6 +340,8 @@ class XipppyTxBuffer(Node):
         self.present_signal_types = []
         self.thread = None
         self.xipppy_use_tcp = True
+        #
+        self.reference_timestamp = None
 
     def _configure(
             self,
@@ -361,6 +363,7 @@ class XipppyTxBuffer(Node):
             print('self.sample_interval_nip = {}'.format(self.sample_interval_nip))
         #
         with self.xp.xipppy_open(use_tcp=self.xipppy_use_tcp):
+            self.reference_timestamp = self.xp.time()
             # get list of channels that actually exist
             self.allElecs = self.xp.list_elec('macro')
             #
@@ -532,7 +535,7 @@ class XipppyRxBuffer(Node):
                 self.pollers[inputname] = ThreadPollInput(self.inputs[inputname])
                 # self.pollers[inputname].new_data.connect(self.analogsignal_received)
         for inputname in self.requested_event_types:
-            # no need for a buffer, will split by channel
+            # events do not need a buffer, will them split by channel inside the source
             self.sources[inputname] = InputStreamEventAndEpochSource(self.inputs[inputname])
             thread = QT.QThread()
             self.source_threads[inputname] = thread
@@ -582,8 +585,8 @@ class XipppyThread(QT.QThread):
         #
         self.lock = Mutex()
         self.running = False
-        # xipppy 5 second buffer duration
-        self.max_buffer_nip = int(5 * 3e4)
+        # xipppy 5 second buffer duration; use 4 sec to avoid hitting the edges
+        self.max_buffer_nip = int(4 * 3e4)
         #
         self.head = 0
         self.last_nip_time = 0
@@ -604,7 +607,8 @@ class XipppyThread(QT.QThread):
                 with self.lock:
                     if not self.running:
                         break
-                # print('XipppyThread: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
+                if self.node.verbose:
+                    print('XipppyThread: sleeping for {:.3f} sec'.format(max(0, next_time - time.perf_counter())))
                 time.sleep(max(0, next_time - time.perf_counter()))
                 # get current nip time
                 self.head = self.node.xp.time()
@@ -612,24 +616,33 @@ class XipppyThread(QT.QThread):
                     self.last_nip_time = self.head - self.node.sample_interval_nip
                 # delta_nip_time: actual elapsed ripple ticks since last read
                 delta_nip_time = self.head - self.last_nip_time
+                ###########################################################################################
+                if delta_nip_time < 0:
+                    # avoid bug where xp.time() reports wrong timestamp
+                    if self.node.verbose:
+                        print('Warning! self.head < self.last_nip_time. Skipping...')
+                    continue
+                ###########################################################################################
                 if self.node.verbose:
                     print('XipppyThread.run()')
                     print('\t          head  = {}'.format(self.head))
                     print('\t                  {:.3f} sec'.format(self.head / 3e4))
                     print('\t last_nip_time  = {}'.format(self.last_nip_time))
                     print('\t                  {:.3f} sec'.format(self.last_nip_time / 3e4))
-                    # print('\t delta_nip_time = {}'.format(delta_nip_time))
-                    # print('\t delta_sec      = {} sec'.format(delta_nip_time / 3e4))
+                    print('\t delta_nip_time = {}'.format(delta_nip_time))
+                    print('\t delta_sec      = {:.3f} sec'.format(delta_nip_time / 3e4))
                 # check that we haven't exhausted the 5 sec xipppy buffer
                 if delta_nip_time > self.max_buffer_nip:
                     self.last_nip_time = self.head - self.max_buffer_nip
                     delta_nip_time = self.head - self.last_nip_time
                     if self.node.verbose:
-                        print('Warning! self.last_nip_time is more than 5 sec in the past')
+                        print('Warning! self.last_nip_time is more than 5 sec in the past. Resetting...')
+                        print('\t last_nip_time  = {}'.format(self.last_nip_time))
+                        print('\t                  {:.3f} sec'.format(self.last_nip_time / 3e4))
+                        print('\t delta_nip_time = {}'.format(delta_nip_time))
+                        print('\t delta_sec      = {:.3f} sec'.format(delta_nip_time / 3e4))
                 #
                 for signalType in self.node.present_analogsignal_types:
-                    # if first_buffer:
-                    #     self.buffers_num_samples[signalType] = 0
                     points_per_period = self.node.outputs[signalType].spec['nip_sample_period']
                     thisNumChans = self.node.outputs[signalType].spec['nb_channel']
                     nPoints = int(delta_nip_time / points_per_period)
@@ -640,6 +653,7 @@ class XipppyThread(QT.QThread):
                         self.node.channels[signalType],
                         self.last_nip_time # start with last missing sample
                         )
+                    timestamp = timestamp - self.node.reference_timestamp
                     if _dtype_analogsignal == 'float64':
                         data_out = np.array(data, dtype=_dtype_analogsignal)
                     else:
@@ -649,25 +663,21 @@ class XipppyThread(QT.QThread):
                         data_out['timestamp'] = np.tile(tOneChan, thisNumChans)
                         data_out['value'] = data
                     data_out = data_out.reshape(
-                        self.node.outputs[signalType].spec['shape'], order='F')
+                        self.node.outputs[signalType].spec['shape'],
+                        order='F')
                     if self.node.verbose:
                         print('signal type {}\n\tread {} samples x {} chans'.format(
-                            signalType, data_out.shape[0], data.shape[1]))
+                            signalType, data_out.shape[0], data_out.shape[1]))
                         buffer_duration = data_out.shape[0] / self.node.outputs[signalType].spec['sample_rate']
                         print('\tbuffer duration: {:.3f} sec'.format(buffer_duration))
                         # print('data > 0 sum: {}'.format(np.sum((np.abs(np.asarray(data)) > 0))))
-                    # self.buffers_num_samples[signalType] += data.shape[0]
-                    # print('self.buffers_num_samples[{}] = {}'.format(signalType, self.buffers_num_samples[signalType]))
-                    # self.node.outputs[signalType].send(data, index=self.buffers_num_samples[signalType])
-                    '''
-                    if first_buffer:
-                        self.node.outputs[signalType].spec.update({
-                            't_start': timestamp / 3e4,
-                            })
-                            '''
+                    if data_out.shape[0] == 0:
+                        if self.node.verbose:
+                            print('Warning! No data read. Skipping...')
+                        continue
                     equiv_index = int(timestamp / points_per_period + data_out.shape[0])
                     # print(f'{signalType}: equiv_index = {equiv_index}')
-                    self.node.outputs[signalType].send(data_out, index = equiv_index)
+                    self.node.outputs[signalType].send(data_out, index=equiv_index)
                 # send stim events
                 for signalType in self.node.present_event_types:
                     '''
@@ -680,8 +690,9 @@ class XipppyThread(QT.QThread):
                         [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
                         chanNums += [chanIdx for _ in packetList]
                         packets += packetList
-                        if len(packetList) and self.node.verbose:
-                            print([(dat.timestamp, chanIdx, dat.class_id) for dat in packetList])
+                        if len(packetList):
+                            # if len(packetList) and self.node.verbose:
+                            print([(dat.timestamp - self.node.reference_timestamp, chanIdx, dat.class_id) for dat in packetList])
                     nPackets = len(packets)
                     if nPackets > 0:
                         if self.node._sortEventOutputs:
@@ -689,7 +700,7 @@ class XipppyThread(QT.QThread):
                             # Sort events by timestamp
                             outputPacket = np.array(
                                 [
-                                    (dat.timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
+                                    (dat.timestamp - self.node.reference_timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
                                     for ch, dat in sorted(zip(chanNums, packets), key=_spikeKeyExtractor)],
                                 dtype=_dtype_segmentDataPacket)
                         else:
@@ -697,7 +708,7 @@ class XipppyThread(QT.QThread):
                             # Leave items sorted by channel
                             outputPacket = np.array(
                                 [
-                                    (dat.timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
+                                    (dat.timestamp - self.node.reference_timestamp, ch, np.asarray(dat.wf, dtype=int), dat.class_id,)
                                     for ch, dat in zip(chanNums, packets)],
                                 dtype=_dtype_segmentDataPacket)
                         self.node.outputs[signalType].send(outputPacket)
