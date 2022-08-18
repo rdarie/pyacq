@@ -390,7 +390,7 @@ class InputStreamAnalogSignalSource(BaseAnalogSignalSource, QT.QObject):
         self.get_with_join = get_with_join
         #
         self.has_custom_dtype = self.input.params['dtype'].names is not None
-        print(f"InputStreamAnalogSignalSource: self.has_custom_dtype = {self.has_custom_dtype}")
+        # print(f"InputStreamAnalogSignalSource: self.has_custom_dtype = {self.has_custom_dtype}")
         self.signals = self.input.buffer
         self.sample_rate = float(self.input.params['sample_rate'])
         self.reference_signal = None
@@ -731,7 +731,7 @@ class NodeMainViewer(MainViewer):
 
     def __init__(
             self, node=None, time_reference_source=None,
-            speed=None,
+            refreshRateHz=None,
             debug=False, settings_name=None, parent=None,
             global_xsize_zoom=False, navigation_params={},
             window_title="Signal viewer"):
@@ -744,10 +744,10 @@ class NodeMainViewer(MainViewer):
         self.source_buffer_dur = None
         # self.t_head = None
         #
-        if speed is not None:
-            self.speed = speed
+        if refreshRateHz is not None:
+            self.refreshRateHz = refreshRateHz
         else:
-            self.speed = 1.
+            self.refreshRateHz = 1.
             
         QT.QMainWindow.__init__(self, parent)
 
@@ -757,6 +757,7 @@ class NodeMainViewer(MainViewer):
             pyver = '.'.join(str(e) for e in sys.version_info[0:3])
             appname = 'ephyviewer'+'_py'+pyver
             self.settings = QT.QSettings(appname, self.settings_name)
+        
         self.global_xsize_zoom = global_xsize_zoom
         self.xsize = 3.
         self.xratio = 0.3
@@ -778,9 +779,9 @@ class NodeMainViewer(MainViewer):
         dock.setFeatures(QT.DockWidget.NoDockWidgetFeatures)  # prevent accidental movement and undockingx
         self.addDockWidget(QT.TopDockWidgetArea, dock)
         #
-        self.navigation_toolbar.speedSpin.setValue(self.speed)
-        # self.timer = RefreshTimer(interval=self.speed ** -1, node=self)
-        self.timer = SeekTimer(interval=self.speed ** -1, parent=self)
+        self.navigation_toolbar.speedSpin.setValue(self.refreshRateHz)
+        # self.timer = RefreshTimer(interval=self.refreshRateHz ** -1, node=self)
+        self.timer = SeekTimer(interval=self.refreshRateHz ** -1, parent=self)
         # self.timer.timeout.connect(self.refresh)
         self.threads.append(self.timer)
         #
@@ -833,9 +834,9 @@ class NodeMainViewer(MainViewer):
             # self.seek_time.connect(widget.seek)
         return
 
-    def on_change_speed(self, speed):
-        self.speed = speed
-        self.timer.set_interval(speed ** -1)
+    def on_change_speed(self, refreshRateHz):
+        self.refreshRateHz = refreshRateHz
+        self.timer.set_interval(refreshRateHz ** -1)
 
     def start_viewers(self):
         self.showMaximized()

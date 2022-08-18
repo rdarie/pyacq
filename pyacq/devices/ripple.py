@@ -29,6 +29,7 @@ except ImportError as error:
         }
 from pyacq.viewers.ephyviewer_mixin import (InputStreamAnalogSignalSource, InputStreamEventAndEpochSource)
 import numpy as np
+import pandas as pd
 from scipy import signal
 import time
 from copy import copy, deepcopy
@@ -44,6 +45,48 @@ import array
 import ctypes
 import itertools
 import json
+
+
+def mapToDF(arrayFilePath):
+    arrayMap = pd.read_csv(
+        arrayFilePath, sep='; ',
+        skiprows=10, header=None, engine='python',
+        names=['FE', 'electrode', 'position'])
+    cmpDF = pd.DataFrame(
+        np.nan, index=range(146),
+        columns=[
+            'xcoords', 'ycoords', 'zcoords', 'elecName',
+            'elecID', 'label', 'bank', 'bankID', 'nevID']
+        )
+    bankLookup = {
+        'A.1': 0, 'A.2': 1, 'A.3': 2, 'A.4': 3,
+        'B.1': 4, 'B.2': 5, 'B.3': 6, 'B.4': 7}
+    for rowIdx, row in arrayMap.iterrows():
+        processor, port, FEslot, channel = row['FE'].split('.')
+        bankName = '{}.{}'.format(port, FEslot)
+        array, electrodeFull = row['electrode'].split('.')
+        if '_' in electrodeFull:
+            electrode, electrodeRep = electrodeFull.split('_')
+        else:
+            electrode = electrodeFull
+        x, y, z = row['position'].split('.')
+        nevIdx = int(channel) - 1 + bankLookup[bankName] * 32
+        cmpDF.loc[nevIdx, 'elecID'] = int(electrode[1:])
+        cmpDF.loc[nevIdx, 'nevID'] = nevIdx
+        cmpDF.loc[nevIdx, 'elecName'] = array
+        cmpDF.loc[nevIdx, 'xcoords'] = float(x)
+        cmpDF.loc[nevIdx, 'ycoords'] = float(y)
+        cmpDF.loc[nevIdx, 'zcoords'] = float(z)
+        cmpDF.loc[nevIdx, 'label'] = row['electrode'].replace('.', '_')
+        cmpDF.loc[nevIdx, 'bank'] = bankName
+        cmpDF.loc[nevIdx, 'bankID'] = int(channel)
+        cmpDF.loc[nevIdx, 'FE'] = row['FE']
+    #
+    cmpDF.dropna(inplace=True)
+    cmpDF.reset_index(inplace=True, drop=True)
+    cmpDF.loc[:, 'nevID'] += 1
+    # pdb.set_trace()
+    return cmpDF
 
 # Helper types
 class DummySegmentDataPacket:
@@ -309,7 +352,8 @@ class XipppyTxBuffer(Node):
         #     'streamtype': 'event', 'dtype': _dtype_segmentDataPacket},
             })
 
-    def __init__(self, dummy=False, dummy_kwargs=dict(), **kargs):
+    def __init__(
+        self, dummy=False, dummy_kwargs=dict(), **kargs):
         Node.__init__(self, **kargs)
         self.dummy = dummy
         if self.dummy:
@@ -347,7 +391,7 @@ class XipppyTxBuffer(Node):
             self,
             sample_interval_sec=1., sample_chunksize_sec=.5,
             buffer_size_sec=250e-3, latency_padding_sec=50e-3,
-            xipppy_use_tcp=True,
+            xipppy_use_tcp=True, mapFilePath=None,
             channels={}, verbose=False, debugging=False):
         #
         self.xipppy_use_tcp = xipppy_use_tcp
@@ -359,6 +403,13 @@ class XipppyTxBuffer(Node):
         self.verbose = verbose
         self.debugging = debugging
         #
+        if mapFilePath is not None:
+            self.electrodeMapDF = mapToDF(mapFilePath)
+            self.nevIndexedMap = self.electrodeMapDF.set_index('nevID')
+        else:
+            self.electrodeMapDF = None
+            self.nevIndexedMap = None
+        #
         if self.verbose:
             print('self.sample_interval_nip = {}'.format(self.sample_interval_nip))
         #
@@ -366,6 +417,7 @@ class XipppyTxBuffer(Node):
             self.reference_timestamp = self.xp.time()
             # get list of channels that actually exist
             self.allElecs = self.xp.list_elec('macro')
+            # this list is zero indexed
             #
             for signalType in ripple_signal_types:
                 # configure list of channels to stream
@@ -422,12 +474,35 @@ class XipppyTxBuffer(Node):
             self.present_signal_types = self.present_analogsignal_types + self.present_event_types
     
     def after_output_configure(self, signalType):
-        channel_info = [
-            {
-                'channel_index': c,
-                'name': '{}_{}'.format(signalType, c)}
-            for c in self.channels[signalType]]
-        self.outputs[signalType].params['channel_info'] = channel_info
+        if self.nevIndexedMap is not None:
+            channel_info = []
+            for c in self.channels[signalType]:
+                nevID = c + 1
+                thisEntry = {'channel_index': c}
+                if nevID in self.nevIndexedMap.index:
+                    thisEntry['name'] = f"{self.nevIndexedMap.loc[nevID, 'label']}"
+                    for key in ['xcoords', 'ycoords']:
+                        thisEntry[key] = self.nevIndexedMap.loc[nevID, key]
+                else:
+                    thisEntry['name'] = f"{nevID}"
+                    thisEntry['xcoords'] = 0
+                    thisEntry['ycoords'] = 0
+                channel_info.append(thisEntry)
+            self.outputs[signalType].params['channel_info'] = channel_info
+        else:
+            channel_info = [
+                {
+                    'channel_index': c,
+                    'name': f"{c + 1}",
+                    'xcoords': 0, # 100 * (c % 3),
+                    'ycoords': 0, # 100 * c
+                    }
+                for c in self.channels[signalType]
+                ]
+            self.outputs[signalType].params['channel_info'] = channel_info
+        # print(f"{signalType}\n{channel_info}")
+        return
+
 
     def _initialize(self):
         self.thread = XipppyThread(self, parent=None)
@@ -690,8 +765,8 @@ class XipppyThread(QT.QThread):
                         [_, packetList] = self.node.dataReaderFuns[signalType](chanIdx, 1023)
                         chanNums += [chanIdx for _ in packetList]
                         packets += packetList
-                        if len(packetList):
-                            # if len(packetList) and self.node.verbose:
+                        # if len(packetList):
+                        if len(packetList) and self.node.verbose:
                             print([(dat.timestamp - self.node.reference_timestamp, chanIdx, dat.class_id) for dat in packetList])
                     nPackets = len(packets)
                     if nPackets > 0:
@@ -865,6 +940,7 @@ _dtype_stim_packet = [
 _zero_stim_packet = np.zeros((1,), dtype=_dtype_stim_packet)
 
 def elecListToBinary(elecList):
+    # print(f"elecListToBinary: {elecList}")
     listRaw = [int(idx in elecList) for idx in range(64)]
     return np.packbits(listRaw)
 
@@ -946,7 +1022,10 @@ class StimPacketReceiver(Node):
                     stim_packet = np.empty((1,), dtype=_dtype_stim_packet)
                     for key, value in stim_ack.items():
                         if key in ['elecCath', 'elecAno']:
-                            stim_packet[key] = elecListToBinary(value)
+                            if isinstance(value, list):
+                                stim_packet[key] = elecListToBinary(value)
+                            elif isinstance(value, int):
+                                stim_packet[key] = elecListToBinary([value])
                         else:
                             stim_packet[key] = value
                     self.outputs['stim_packets'].send(stim_packet)
