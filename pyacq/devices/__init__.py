@@ -15,3 +15,4 @@ from .openephys_gui_relay import OpenEphysGUIRelay
 from .noise_generator import NoiseGenerator
 from .simple_input_node import StreamMonitor
 from .ripple import *
+from .vicon import *
