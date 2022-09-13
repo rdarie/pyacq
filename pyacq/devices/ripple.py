@@ -127,11 +127,11 @@ ripple_event_filler = np.array([(
     np.array(_xp_spk.wf), _xp_spk.class_id),], dtype=_dtype_segmentDataPacket)
 _dtype_analogsignal  = [
     ('timestamp', 'int64'), ('value', 'float64')]
-ripple_analogsignal_filler = np.array([(0, 0.),], dtype=_dtype_analogsignal)
+_analogsignal_filler = np.array([(0, 0.),], dtype=_dtype_analogsignal)
 
 sortEventOutputs = False
 # _dtype_analogsignal = 'float64'
-# ripple_analogsignal_filler = np.nan
+# _analogsignal_filler = np.nan
 
 
 ripple_sample_rates = {
@@ -341,7 +341,7 @@ class XipppyTxBuffer(Node):
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates[signalType],
             'nip_sample_period': ripple_nip_sample_periods[signalType],
-            'compression': '', 'fill': ripple_analogsignal_filler}
+            'compression': '', 'fill': _analogsignal_filler}
         for signalType in ripple_analogsignal_types
         }
     _output_specs.update({
@@ -530,7 +530,7 @@ class XipppyRxBuffer(Node):
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates[signalType],
             'nip_sample_period': ripple_nip_sample_periods[signalType],
-            'compression': '', 'fill': ripple_analogsignal_filler}
+            'compression': '', 'fill': _analogsignal_filler}
         for signalType in ripple_analogsignal_types
         }
     _output_specs.update({
@@ -545,7 +545,7 @@ class XipppyRxBuffer(Node):
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
             'sample_rate': ripple_sample_rates[signalType],
             'nip_sample_period': ripple_nip_sample_periods[signalType],
-            'fill': ripple_analogsignal_filler}
+            'fill': _analogsignal_filler}
         for signalType in ripple_analogsignal_types
         }
     _input_specs.update({
@@ -849,7 +849,7 @@ class RippleStreamAdapter(Node):
     _input_specs = {
         'signals': {
             'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'compression': '', 'fill': ripple_analogsignal_filler},
+            'compression': '', 'fill': _analogsignal_filler},
         'events' : {
             'streamtype': 'event', 'shape': (-1,),
             'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
