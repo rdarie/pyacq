@@ -1,8 +1,9 @@
 import pdb, traceback
 import warnings
 
-from pyacq.core import Node, OutputStream, RPCClient, register_node_type
+from pyacq.core import Node, InputStream, OutputStream, RPCClient, register_node_type
 from pyacq.core.tools import ThreadPollInput, weakref, make_dtype
+from pyacq.viewers.ephyviewer_mixin import (InputStreamAnalogSignalSource, InputStreamEventAndEpochSource)
 from ephyviewer.myqt import QT
 from pyqtgraph.util.mutex import Mutex
 import numpy as np
@@ -219,43 +220,57 @@ class Vicon(Node):
             sample_rate = self.vicon_client.GetFrameRate()
             if 'markers' in self.requested_signal_types:
                 for subjectName in self.vicon_client.GetSubjectNames():
-                    for markerName, parentSegment in self.vicon_client.GetMarkerNames(subjectName):
-                        this_spec = {
-                            'streamtype': 'analogsignal',
-                            'sample_rate': sample_rate,
-                            'segment': parentSegment,
-                            'vicon_type': 'marker',
-                            'nb_channel': 1, # custom dtype of (x, y, z and occluded flag)
-                            'shape': (-1, 1),
-                            'dtype': _dtype_vicon_marker_position,
-                            'buffer_size': 1000
-                            }
-                        self.output_specs[markerName] = this_spec
-                        self.outputs[markerName] = OutputStream(spec=this_spec, node=self, name=markerName)
+                    # for markerName, parentSegment in self.vicon_client.GetMarkerNames(subjectName):
+                    markers_info =  self.vicon_client.GetMarkerNames(subjectName)
+                    chan_idx = 0
+                    channel_info = []
+                    for mi in markers_info:
+                        for coord in ['X', 'Y', 'Z']:
+                            channel_info.append({
+                                'markerName': mi[0],
+                                'segment': mi[1], 
+                                'subjectName': subjectName,
+                                'coord': coord,
+                                'name': f"{subjectName}:{mi[0]}:{coord}",
+                                'channel_index': chan_idx
+                                })
+                            chan_idx += 1
+                    this_spec = {
+                        'streamtype': 'analogsignal',
+                        'sample_rate': sample_rate,
+                        'vicon_type': 'marker',
+                        'nb_channel': 3 * len(markers_info), # custom dtype of (x, y, z and occluded flag)
+                        'shape': (-1, 3 * len(markers_info)),
+                        'dtype': float,
+                        'buffer_size': 1000,
+                        'channel_info': channel_info}
+                    self.output_specs[subjectName] = this_spec
+                    self.outputs[subjectName] = OutputStream(spec=this_spec, node=self, name=subjectName)
             if 'devices' in self.requested_signal_types:
                 devDetailsDict = {}
                 for deviceName, deviceType in self.vicon_client.GetDeviceNames():
                     output_details = self.vicon_client.GetDeviceOutputDetails(deviceName)
                     devDetailsDict[(deviceName, deviceType)] = pd.DataFrame(output_details, columns=['outputName', 'componentName', 'unit'])
                 self._device_details = pd.concat(devDetailsDict, names=['deviceName', 'deviceType', 'oIdx']).reset_index().drop(columns=['oIdx'])
-                group_name_list = ['deviceName', 'deviceType', 'outputName']
-                for outputNameList, group in self._device_details.groupby(group_name_list, sort=False):
-                    deviceName, deviceType, outputName = outputNameList
-                    thisName = f'{deviceName} - {outputName}'
+                self._device_details.loc[:, 'name'] = self._device_details.apply(lambda x: f"{x['deviceName']} - {x['outputName']} - {x['componentName']}", axis='columns')
+                self._device_details.loc[:, 'channel_index'] = self._device_details.index
+                group_name_list = ['deviceName', 'deviceType']
+                for (devName, devType), group in self._device_details.groupby(group_name_list, sort=False):
                     columnsToSave = [cN for cN in group.columns if cN not in group_name_list]
+                    channel_info = group.loc[:, columnsToSave].apply(lambda x: x.to_dict(), axis='columns').to_list()
                     this_spec = {
                         'streamtype': 'analogsignal',
                         'sample_rate': sample_rate,
                         'vicon_type': 'device',
-                        'device_type': deviceType,
-                        'output_details': group.loc[:, columnsToSave],
+                        'device_type': devType,
+                        'channel_info': channel_info,
                         'nb_channel': group.shape[0],
                         'shape': (-1,  group.shape[0]),
                         'dtype': float,
                         'buffer_size': 1000
                         }
-                    self.output_specs[thisName] = this_spec
-                    self.outputs[thisName] = OutputStream(spec=this_spec, node=self, name=thisName)
+                    self.output_specs[devName] = this_spec
+                    self.outputs[devName] = OutputStream(spec=this_spec, node=self, name=devName)
         except ViconDataStream.DataStreamException as e:
             print('Handled data stream error', e)
 
@@ -339,6 +354,10 @@ class Vicon(Node):
             for sampleName, sampleValue in latency_samples.items():
                 print( sampleName, sampleValue )
         return latency_total, latency_samples
+
+
+register_node_type(Vicon)
+
 
 class ViconClientThread(QT.QThread):
     """
@@ -470,22 +489,25 @@ class ViconClientThread(QT.QThread):
                 subjectNames = self.vicon_client.GetSubjectNames()
                 for subjectIdx, subjectName in enumerate(subjectNames):
                     if 'markers' in self.requested_signal_types:
+                        this_set = []
                         markerNames = [mn[0] for mn in self.vicon_client.GetMarkerNames(subjectName)]
                         for markerIdx, markerName in enumerate(markerNames):
                             raw_marker_position, occluded = self.vicon_client.GetMarkerGlobalTranslation(subjectName, markerName)
-                            marker_position = np.array(
-                                [(*raw_marker_position, occluded),], dtype=_dtype_vicon_marker_position)
-                            self.node.outputs[markerName].send(marker_position[np.newaxis])
+                            # marker_position = np.array(
+                            #     [(*raw_marker_position, occluded),], dtype=_dtype_vicon_marker_position)[:, np.newaxis]
+                            this_set.append(np.asarray(raw_marker_position)[:, np.newaxis])
+                        data = np.concatenate(this_set, axis=1)
+                        self.node.outputs[subjectName].send(data)
+
                 if 'devices' in self.requested_signal_types:
-                    group_name_list = ['deviceName', 'outputName', 'deviceType']
-                    for (devName, outName, devType), group in self.node._device_details.groupby(group_name_list, sort=False):
+                    group_name_list = ['deviceName', 'deviceType']
+                    for (devName, devType), group in self.node._device_details.groupby(group_name_list, sort=False):
                         this_set = []
-                        for compName in group['componentName']:
+                        for (outName, compName), _ in group.groupby(['outputName', 'componentName'], sort=False):
                             values, occluded = self.vicon_client.GetDeviceOutputValues(devName, outName, compName)
                             this_set.append(np.asarray(values)[:, np.newaxis])
-                        thisName = f"{devName} - {outName}"
                         data = np.concatenate(this_set, axis=1)
-                        self.node.outputs[thisName].send(data)
+                        self.node.outputs[devName].send(data)
                 # WIP alternative marker workflow based on trajID
                 '''
                 if 'markers' in self.requested_signal_types:
@@ -504,6 +526,7 @@ class ViconClientThread(QT.QThread):
     def stop(self):
         with self.lock:
             self.running = False
+
 
 class ViconRetimingClientThread(QT.QThread):
     """
@@ -604,4 +627,158 @@ class ViconRetimingClientThread(QT.QThread):
             self.running = False
 
 
-register_node_type(Vicon)
+class ViconRxBuffer(Node):
+    """
+    A Node is the basic element for generating and processing data streams
+    in pyacq. 
+    
+    Nodes may be used to interact with devices, generate data, store data, 
+    perform computations, or display user interfaces. Each node may have multiple
+    input and output streams that connect to other nodes. For example::
+    
+       [ data acquisition node ] -> [ processing node ] -> [ display node ]
+                                                        -> [ recording node ]
+    
+    An application may directly create and connect the Nodes it needs, or it
+    may use a Manager to create a network of nodes distributed across multiple
+    processes or machines.
+    
+    The order of operations when creating and operating a node is very important:
+    
+    1. Instantiate the node directly or remotely using `NodeGroup.create_node`.
+    2. Call `Node.configure(...)` to set global parameters such as sample rate,
+       channel selections, etc.
+    3. Connect inputs to their sources (if applicable):
+       `Node.inputs['input_name'].connect(other_node.outpouts['output_name'])`
+    4. Configure outputs: `Node.outputs['output_name'].configure(...)`
+    5. Call `Node.initialize()`, which will verify input/output settings, 
+       allocate memory, prepare devices, etc.
+    6. Call `Node.start()` and `Node.stop()` to begin/end reading from input 
+       streams and writing to output streams. These may be called multiple times.
+    7. Close the node with `Node.close()`. If the node was created remotely, 
+       this is handled by the NodeGroup to which it belongs.
+    
+    Notes
+    -----
+    
+    For convenience, if a Node has only 1 input or 1 output:
+    
+    * `Node.inputs['input_name']` can be written `Node.input`
+    * `Node.outputs['output_name']` can be written `Node.output`
+    
+    When there are several outputs or inputs, this shorthand is not permitted.
+    
+    The state of a Node can be requested using thread-safe methods:
+    
+    * `Node.running()`
+    * `Node.configured()`
+    * `Node.initialized()`
+    """
+    _input_specs = {}
+    _output_specs = {}
+    
+    def __init__(self, name='', parent=None):
+        self.sources = {}
+        self.pollers = {}
+        self.source_threads = {}
+        Node.__init__(self, name=name, parent=parent)
+    
+    def _configure(self, output_dict={}, **kargs):
+        """This method is called during `Node.configure()` and must be
+        reimplemented by subclasses.
+        """
+        for outputName, output in output_dict.items():
+            this_spec = output.spec
+            self.inputs[outputName] = InputStream(spec=this_spec, node=self, name=outputName)
+
+    def _initialize(self, **kargs):
+        """This method is called during `Node.initialize()` and must be
+        reimplemented by subclasses.
+        """
+        for inputName, thisInput in self.inputs.items():
+            bufferParams = {
+                key: thisInput.params[key] for key in ['double', 'axisorder', 'fill']}
+            bufferParams['size'] = thisInput.params['buffer_size']
+            if (thisInput.params['transfermode'] == 'sharedmem'):
+                if 'shm_id' in thisInput.params:
+                    bufferParams['shmem'] = thisInput.params['shm_id']
+                else:
+                    bufferParams['shmem'] = True
+            else:
+                bufferParams['shmem'] = None
+            thisInput.set_buffer(**bufferParams)
+            self.sources[inputName] = InputStreamAnalogSignalSource(thisInput)
+            #
+            thread = QT.QThread()
+            self.source_threads[inputName] = thread
+            self.sources[inputName].moveToThread(thread)
+            # 
+            self.pollers[inputName] = ThreadPollInput(thisInput)
+
+    
+    def _start(self):
+        """This method is called during `Node.start()` and must be
+        reimplemented by subclasses.
+        """
+        for inputname, poller in self.pollers.items():
+            poller.start()
+            self.source_threads[inputname].start()
+    
+    def _stop(self):
+        """This method is called during `Node.stop()` and must be
+        reimplemented by subclasses.
+        """
+        for inputname, poller in self.pollers.items():
+            poller.stop()
+            poller.wait()
+            self.source_threads[inputname].stop()
+            self.source_threads[inputname].wait()
+
+    def _close(self, **kargs):
+        """This method is called during `Node.close()` and must be
+        reimplemented by subclasses.
+        """
+        for inputname in self.requested_event_types:
+            source = self.sources[inputname]
+            for buffer in source.buffers_by_channel:
+                if buffer.shm_id is not None:
+                    self.buffer._shm.close()
+        if self.running():
+            self.stop()
+    
+    def check_input_specs(self):
+        """This method is called during `Node.initialize()` and may be
+        reimplemented by subclasses to ensure that inputs are correctly
+        configured before the node is started.
+        
+        In case of misconfiguration, this method must raise an exception.
+        """
+        pass
+    
+    def check_output_specs(self):
+        """This method is called during `Node.initialize()` and may be
+        reimplemented by subclasses to ensure that outputs are correctly
+        configured before the node is started.
+        
+        In case of misconfiguration, this method must raise an exception.
+        """
+        pass
+    
+    def after_input_connect(self, inputname):
+        """This method is called when one of the Node's inputs has been
+        connected.
+        
+        It may be reimplemented by subclasses.
+        """
+        pass
+    
+    def after_output_configure(self, outputname):
+        """This method is called when one of the Node's outputs has been
+        configured.
+        
+        It may be reimplemented by subclasses.
+        """
+        pass
+    
+
+register_node_type(ViconRxBuffer)

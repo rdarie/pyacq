@@ -1,0 +1,35 @@
+{
+    "grouping_info": [
+        {
+            "sample_rate": 200,
+            "grouping_args": {
+                "deviceName": [
+                    "Delsys Accelerometers 2.0.2 #2",
+                    "Delsys IM AUX 2.0.2 #4"
+                ]
+            }
+        },
+        {
+            "sample_rate": 1000,
+            "grouping_args": {
+                "deviceName": [
+                    "LeftForcePlate",
+                    "LeftHandRail",
+                    "RightHandRail",
+                    "RightForcePlate",
+                    "UARToBLE",
+                    "GeneralComment"
+                ]
+            }
+        },
+        {
+            "sample_rate": 2000,
+            "grouping_args": {
+                "deviceName": [
+                    "Delsys EMG 2.0.2 #1",
+                    "Delsys IM EMG 2.0.2 #3"
+                ]
+            }
+        }
+    ]
+}
