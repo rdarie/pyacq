@@ -46,6 +46,9 @@ import ctypes
 import itertools
 import json
 
+bankLookup = {
+    'A.1': 0, 'A.2': 1, 'A.3': 2, 'A.4': 3,
+    'B.1': 4, 'B.2': 5, 'B.3': 6, 'B.4': 7}
 
 def mapToDF(arrayFilePath):
     arrayMap = pd.read_csv(
@@ -58,9 +61,6 @@ def mapToDF(arrayFilePath):
             'xcoords', 'ycoords', 'zcoords', 'elecName',
             'elecID', 'label', 'bank', 'bankID', 'nevID']
         )
-    bankLookup = {
-        'A.1': 0, 'A.2': 1, 'A.3': 2, 'A.4': 3,
-        'B.1': 4, 'B.2': 5, 'B.3': 6, 'B.4': 7}
     for rowIdx, row in arrayMap.iterrows():
         processor, port, FEslot, channel = row['FE'].split('.')
         bankName = '{}.{}'.format(port, FEslot)
@@ -70,7 +70,8 @@ def mapToDF(arrayFilePath):
         else:
             electrode = electrodeFull
         x, y, z = row['position'].split('.')
-        nevIdx = int(channel) - 1 + bankLookup[bankName] * 32
+        nevIdx = int(channel) -1 + bankLookup[bankName] * 32
+        # zero  indexed!!
         cmpDF.loc[nevIdx, 'elecID'] = int(electrode[1:])
         cmpDF.loc[nevIdx, 'nevID'] = nevIdx
         cmpDF.loc[nevIdx, 'elecName'] = array
@@ -84,8 +85,6 @@ def mapToDF(arrayFilePath):
     #
     cmpDF.dropna(inplace=True)
     cmpDF.reset_index(inplace=True, drop=True)
-    cmpDF.loc[:, 'nevID'] += 1
-    # pdb.set_trace()
     return cmpDF
 
 # Helper types
@@ -236,16 +235,16 @@ def dummySpk(t_start, t_stop, max_spk):
 
 class DummyXipppy():
     t_zero = time.time()
-    _num_elecs = 16
+    _num_elecs = 32
 
     SegmentDataPacket = DummySegmentDataPacket
 
     default_signal_type_lookup = {
         'raw': [],
-        'hi-res': [eNum for eNum in range(1, _num_elecs + 1)],
-        'hifreq': [eNum for eNum in range(1, _num_elecs + 1)],
+        'hi-res': [eNum for eNum in range(0, _num_elecs)],
+        'hifreq': [eNum for eNum in range(0, _num_elecs)],
         'lfp': [],
-        'stim': [eNum for eNum in range(1, _num_elecs + 1)],
+        'stim': [eNum for eNum in range(0, _num_elecs)],
         }
 
     def __init__(
@@ -303,7 +302,7 @@ class DummyXipppy():
         return chanNum in self.signal_type_lookup[signalType]
 
     def list_elec(self, feType=None):
-        return [eNum for eNum in range(1, self._num_elecs + 1)]
+        return [eNum for eNum in range(0, self._num_elecs)]
 
     def _close(self):
         return
@@ -418,7 +417,14 @@ class XipppyTxBuffer(Node):
             # get list of channels that actually exist
             self.allElecs = self.xp.list_elec('macro')
             # this list is zero indexed
-            #
+            '''
+            if self.electrodeMapDF is not None:
+                self.allElecs = [
+                    elNum
+                    for elNum in self.allElecs
+                    # TODO: confirm this is correct for non-dummy signal
+                    if elNum in self.electrodeMapDF['nevID'].to_numpy()]
+                '''
             for signalType in ripple_signal_types:
                 # configure list of channels to stream
                 if signalType in channels:
@@ -476,8 +482,11 @@ class XipppyTxBuffer(Node):
     def after_output_configure(self, signalType):
         if self.nevIndexedMap is not None:
             channel_info = []
+            bankLabel = self.nevIndexedMap['bank'].unique()
+            assert bankLabel.shape == (1,)
+            bankLabel = bankLabel[0]
             for c in self.channels[signalType]:
-                nevID = c + 1
+                nevID = c # + bankLookup[bankLabel] * 32
                 thisEntry = {'channel_index': c}
                 if nevID in self.nevIndexedMap.index:
                     thisEntry['name'] = f"{self.nevIndexedMap.loc[nevID, 'label']}"
@@ -934,7 +943,7 @@ _dtype_stim_packet = [
     ('nipTime', 'u8'),
     ('time', 'u8'),
     ('amp_steps', 'u4'),
-    ('stim_res', 'u4')
+    ('res', 'u4')
     ]
 
 _zero_stim_packet = np.zeros((1,), dtype=_dtype_stim_packet)
@@ -1020,14 +1029,15 @@ class StimPacketReceiver(Node):
                 if json_log_entry['msg_type'] == 'stim_ack_json':
                     stim_ack = json.loads(json_log_entry['msg'])
                     stim_packet = np.empty((1,), dtype=_dtype_stim_packet)
-                    for key, value in stim_ack.items():
-                        if key in ['elecCath', 'elecAno']:
-                            if isinstance(value, list):
-                                stim_packet[key] = elecListToBinary(value)
-                            elif isinstance(value, int):
-                                stim_packet[key] = elecListToBinary([value])
-                        else:
-                            stim_packet[key] = value
+                    for ack_dict  in  stim_ack:
+                        for key, value in ack_dict.items():
+                            if key in ['elecCath', 'elecAno']:
+                                if isinstance(value, list):
+                                    stim_packet[key] = elecListToBinary(value)
+                                elif isinstance(value, int):
+                                    stim_packet[key] = elecListToBinary([value])
+                            else:
+                                stim_packet[key] = value
                     self.outputs['stim_packets'].send(stim_packet)
                     if self.verbose:
                         print(f'StimPacketReceiver: sent {stim_packet}')
