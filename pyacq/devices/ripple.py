@@ -48,7 +48,8 @@ import json
 
 bankLookup = {
     'A.1': 0, 'A.2': 1, 'A.3': 2, 'A.4': 3,
-    'B.1': 4, 'B.2': 5, 'B.3': 6, 'B.4': 7}
+    'B.1': 4, 'B.2': 5, 'B.3': 6, 'B.4': 7
+    }
 
 def mapToDF(arrayFilePath):
     arrayMap = pd.read_csv(
@@ -70,20 +71,22 @@ def mapToDF(arrayFilePath):
         else:
             electrode = electrodeFull
         x, y, z = row['position'].split('.')
-        nevIdx = int(channel) -1 + bankLookup[bankName] * 32
+        nevIdx = int(channel) - 1 + bankLookup[bankName] * 32
         # zero  indexed!!
         cmpDF.loc[nevIdx, 'elecID'] = int(electrode[1:])
         cmpDF.loc[nevIdx, 'nevID'] = nevIdx
         cmpDF.loc[nevIdx, 'elecName'] = array
+        ##
         cmpDF.loc[nevIdx, 'xcoords'] = float(x)
         cmpDF.loc[nevIdx, 'ycoords'] = float(y)
         cmpDF.loc[nevIdx, 'zcoords'] = float(z)
+        ##
         cmpDF.loc[nevIdx, 'label'] = row['electrode'].replace('.', '_')
         cmpDF.loc[nevIdx, 'bank'] = bankName
         cmpDF.loc[nevIdx, 'bankID'] = int(channel)
         cmpDF.loc[nevIdx, 'FE'] = row['FE']
-    #
     cmpDF.dropna(inplace=True)
+    cmpDF.loc[:, 'nevID'] =  cmpDF['nevID'].astype(int)
     cmpDF.reset_index(inplace=True, drop=True)
     return cmpDF
 
