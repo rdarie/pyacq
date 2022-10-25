@@ -5,7 +5,8 @@
             "grouping_args": {
                 "deviceName": [
                     "Delsys Accelerometers 2.0.2 #2",
-                    "Delsys IM AUX 2.0.2 #4"
+                    "Delsys IM AUX 2.0.2 #4",
+                    "Delsys ACC"
                 ]
             }
         },
@@ -27,7 +28,8 @@
             "grouping_args": {
                 "deviceName": [
                     "Delsys EMG 2.0.2 #1",
-                    "Delsys IM EMG 2.0.2 #3"
+                    "Delsys IM EMG 2.0.2 #3",
+                    "Delsys EMG"
                 ]
             }
         }

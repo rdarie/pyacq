@@ -12,7 +12,10 @@ import numpy as np
 import pandas as pd
 import time
 from copy import deepcopy, copy
-from MOCK_vicon_dssdk.vicon_dssdk import ViconDataStream
+import traceback
+
+# from MOCK_vicon_dssdk.vicon_dssdk import ViconDataStream
+from vicon_dssdk import ViconDataStream
 
 vicon_analogsignal_types = [
     'segments',
@@ -182,6 +185,8 @@ class Vicon(Node):
         """
         self.vicon_hostname = f"{ip_address}:{port}"
         self.vicon_buffer_size = vicon_buffer_size
+        if stream_mode is None:
+            stream_mode = ViconDataStream.Client.StreamMode.EClientPull
         self.stream_mode = stream_mode
         self.axis_map = self._default_axis_map if axis_map is None else axis_map
         self.refresh_rate = refresh_rate
@@ -277,6 +282,7 @@ class Vicon(Node):
                     self.outputs[subjectName] = OutputStream(spec=this_spec, node=self, name=subjectName)
             if 'devices' in self.requested_signal_types:
                 devDetailsDict = {}
+                # self.vicon_client.GetDeviceNames()
                 for deviceName, deviceType in self.vicon_client.GetDeviceNames():
                     if output_name_list is not None:
                         if deviceName not in output_name_list:
@@ -523,6 +529,7 @@ class ViconClientThread(QT.QThread):
         with self.lock:
             self.running = True
         #
+        prevFrameNumber = -1
         while True:
             with self.lock:
                 if not self.running:
@@ -530,6 +537,11 @@ class ViconClientThread(QT.QThread):
             try:
                 self.vicon_client.GetFrame()
                 frameNumber = self.vicon_client.GetFrameNumber()
+                if frameNumber <= prevFrameNumber:
+                    continue
+                else:
+                    prevFrameNumber = frameNumber
+                print(f'frameNumber = {frameNumber}')
                 marker_points_per_period = int(3e4 / self.marker_sample_rate)
                 marker_equiv_timestamp = int(frameNumber * marker_points_per_period)
                 for subjectName in self.subjectNames:
@@ -540,7 +552,8 @@ class ViconClientThread(QT.QThread):
                             data[0, markerIdx:markerIdx+3]['timestamp'] = marker_equiv_timestamp
                             data[0, markerIdx:markerIdx+3]['value'] = values
                         self.node.outputs[subjectName].send(data, index=frameNumber)
-                        print(f"{subjectName} marker output, sent to index = {frameNumber}")
+                        # print(f"{subjectName} marker output, sent to index = {frameNumber}")
+                        # self.node.outputs[subjectName].send(data)
                 if 'devices' in self.requested_signal_types:
                     group_name_list = ['deviceName', 'deviceType']
                     # for (devName, devType), group in self.node._device_details.groupby(group_name_list, sort=False):
@@ -558,10 +571,16 @@ class ViconClientThread(QT.QThread):
                             #
                             this_set.append(values_with_time)
                         data = np.concatenate(this_set, axis=1)
+                        # 
                         subFramesPerFrame = self.node.outputs[devName].params['subFramesPerFrame']
-                        equiv_index = int(frameNumber * subFramesPerFrame - data.shape[0] + 1)
-                        self.node.outputs[devName].send(data, index=equiv_index)
-                        print(f"{devName} device output, sent to index = {equiv_index} (equiv_timestamp = {times_np[0]})")
+                        # equiv_index = int(frameNumber * subFramesPerFrame - data.shape[0])
+                        equiv_index = int(frameNumber * subFramesPerFrame)
+                        try:
+                            self.node.outputs[devName].send(data, index=equiv_index)
+                        except:
+                            traceback.print_exc()
+                        # print(f"{devName} device output, sent to index = {equiv_index} (equiv_timestamp = {times_np[0]})")
+                        # self.node.outputs[devName].send(data)
                 # WIP alternative marker workflow based on trajID
                 '''
                 if 'markers' in self.requested_signal_types:
