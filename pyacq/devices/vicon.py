@@ -282,6 +282,9 @@ class Vicon(Node):
                     self.outputs[subjectName] = OutputStream(spec=this_spec, node=self, name=subjectName)
             if 'devices' in self.requested_signal_types:
                 devDetailsDict = {}
+                # pdb.set_trace()
+                listOfDevices = '\n'.join([dn[0] for dn in self.vicon_client.GetDeviceNames()])
+                print(f'presentDevices:\n{listOfDevices}')
                 # self.vicon_client.GetDeviceNames()
                 for deviceName, deviceType in self.vicon_client.GetDeviceNames():
                     if output_name_list is not None:
@@ -541,7 +544,7 @@ class ViconClientThread(QT.QThread):
                     continue
                 else:
                     prevFrameNumber = frameNumber
-                print(f'frameNumber = {frameNumber}')
+                # print(f'frameNumber = {frameNumber}')
                 marker_points_per_period = int(3e4 / self.marker_sample_rate)
                 marker_equiv_timestamp = int(frameNumber * marker_points_per_period)
                 for subjectName in self.subjectNames:

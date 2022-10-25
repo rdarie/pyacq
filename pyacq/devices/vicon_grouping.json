@@ -32,6 +32,18 @@
                     "Delsys EMG"
                 ]
             }
+        },
+        {
+            "sample_rate": 200,
+            "grouping_args": {
+                "deviceName": ["Unnamed Device 21"]
+            }
+        },
+        {
+            "sample_rate": 2000,
+            "grouping_args": {
+                "deviceName": ["Unnamed Device 20"]
+            }
         }
     ]
 }
