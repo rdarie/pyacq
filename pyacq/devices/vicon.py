@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import time
 from copy import deepcopy, copy
-import traceback
 
 # from MOCK_vicon_dssdk.vicon_dssdk import ViconDataStream
 from vicon_dssdk import ViconDataStream
@@ -191,135 +190,139 @@ class Vicon(Node):
         self.axis_map = self._default_axis_map if axis_map is None else axis_map
         self.refresh_rate = refresh_rate
         
-        try:
-            self.vicon_client = ViconDataStream.Client()
-            self.vicon_client.Connect(self.vicon_hostname)
-            # Check the version
-            print('ViconDataStream.Client()\n\nVersion', self.vicon_client.GetVersion())
-            # Check setting the buffer size works
-            self.vicon_client.SetBufferSize(self.vicon_buffer_size)
-            # enable requested data streams
-            for signal_name in self.requested_signal_types:
-                fun_name = f"Enable{vicon_signal_names[signal_name]}Data"
-                enabling_fun = getattr(self.vicon_client, fun_name)
-                # e.g. enabling_fun = client.EnableSegmentData
-                enabling_fun()
-                # Report whether the data type has been enabled
-                checking_fun_name = f"Is{vicon_signal_names[signal_name]}DataEnabled"
-                checking_fun = getattr(self.vicon_client, checking_fun_name)
-                print(f"{checking_fun_name}() = {checking_fun()}")
-            # connect once to establish current frame
-            HasFrame = False
-            while not HasFrame:
-                try:
-                    self.vicon_client.GetFrame()
-                    HasFrame = True
-                except ViconDataStream.DataStreamException as e:
-                    self.vicon_client.GetFrame()
-            #
-            self.vicon_client.SetStreamMode(self.stream_mode)
-            print(
-                f'Get Frame {self.stream_mode}',
-                self.vicon_client.GetFrame(), self.vicon_client.GetFrameNumber())
-            
-            self.vicon_client.SetAxisMapping(*self.axis_map)
-            self.xAxis, self.yAxis, self.zAxis = self.vicon_client.GetAxisMapping()
-            if self.verbose:
-                print( 'X Axis', self.xAxis, 'Y Axis', self.yAxis, 'Z Axis', self.zAxis )
-
-            self.outputs = {}
-            self.output_specs = {}
-
-            if sample_rate_info_json_path is None:
-                sample_rate_info_json_path = os.path.join(Path(__file__).parent, 'vicon_grouping.json')
-            with open(sample_rate_info_json_path, 'r') as f:
-                sample_rate_info = json.load(f)['grouping_info']
-            deviceNames2SampleRate = {}
-            for info_dict in sample_rate_info:
-                this_sr = info_dict['sample_rate']
-                these_dev_names = info_dict['grouping_args']['deviceName']
-                for dev_name in these_dev_names:
-                    deviceNames2SampleRate[dev_name] = this_sr
+        for attempt_idx in range(10):
+            try:
+                self.vicon_client = ViconDataStream.Client()
+                self.vicon_client.Connect(self.vicon_hostname)
+                # Check the version
+                print('ViconDataStream.Client()\n\nVersion', self.vicon_client.GetVersion())
+                # Check setting the buffer size works
+                self.vicon_client.SetBufferSize(self.vicon_buffer_size)
+                # enable requested data streams
+                for signal_name in self.requested_signal_types:
+                    fun_name = f"Enable{vicon_signal_names[signal_name]}Data"
+                    enabling_fun = getattr(self.vicon_client, fun_name)
+                    # e.g. enabling_fun = client.EnableSegmentData
+                    print(f'Enabling {signal_name} stream')
+                    enabling_fun()
+                    # Report whether the data type has been enabled
+                    checking_fun_name = f"Is{vicon_signal_names[signal_name]}DataEnabled"
+                    checking_fun = getattr(self.vicon_client, checking_fun_name)
+                    print(f"{checking_fun_name}() = {checking_fun()}")
+                # connect once to establish current frame
+                HasFrame = False
+                while not HasFrame:
+                    try:
+                        self.vicon_client.GetFrame()
+                        HasFrame = True
+                    except ViconDataStream.DataStreamException as e:
+                        self.vicon_client.GetFrame()
+                #
+                self.vicon_client.SetStreamMode(self.stream_mode)
+                print(
+                    f'Get Frame {self.stream_mode}',
+                    self.vicon_client.GetFrame(), self.vicon_client.GetFrameNumber())
                 
-            self.marker_sample_rate = self.vicon_client.GetFrameRate()
-            self.subjectNames = self.vicon_client.GetSubjectNames()
-            self.all_markers_info = {}
-            self.all_device_output_details = {}
-            if 'markers' in self.requested_signal_types:
-                for subjectName in self.subjectNames:
-                    if output_name_list is not None:
-                        if subjectName not in output_name_list:
-                            continue
-                    # for markerName, parentSegment in self.vicon_client.GetMarkerNames(subjectName):
-                    markers_info = self.vicon_client.GetMarkerNames(subjectName)
-                    self.all_markers_info[subjectName] = markers_info
-                    chan_idx = 0
-                    channel_info = []
-                    for mi in markers_info:
-                        for coord in ['X', 'Y', 'Z']:
-                            channel_info.append({
-                                'markerName': mi[0],
-                                'segment': mi[1], 
-                                'subjectName': subjectName,
-                                'coord': coord,
-                                'name': f"{subjectName}:{mi[0]}:{coord}",
-                                'channel_index': chan_idx
-                                })
-                            chan_idx += 1
-                    this_spec = {
-                        'streamtype': 'analogsignal',
-                        'sample_rate': self.marker_sample_rate,
-                        'vicon_type': 'marker',
-                        'nb_channel': 3 * len(markers_info), # custom dtype of (x, y, z and occluded flag)
-                        'shape': (-1, 3 * len(markers_info)),
-                        'dtype': _dtype_analogsignal,
-                        'fill': _analogsignal_filler,
-                        'buffer_size': pyacq_buffer_size,
-                        'subFramesPerFrame': 1,
-                        'nip_sample_period': int(3e4 / self.marker_sample_rate),
-                        'channel_info': channel_info}
-                    self.output_specs[subjectName] = this_spec
-                    self.outputs[subjectName] = OutputStream(spec=this_spec, node=self, name=subjectName)
-            if 'devices' in self.requested_signal_types:
-                devDetailsDict = {}
-                # pdb.set_trace()
-                listOfDevices = '\n'.join([dn[0] for dn in self.vicon_client.GetDeviceNames()])
-                print(f'presentDevices:\n{listOfDevices}')
-                # self.vicon_client.GetDeviceNames()
-                for deviceName, deviceType in self.vicon_client.GetDeviceNames():
-                    if output_name_list is not None:
-                        if deviceName not in output_name_list:
-                            continue
-                    output_details = self.vicon_client.GetDeviceOutputDetails(deviceName)
-                    self.all_device_output_details[deviceName] = output_details
-                    devDetailsDict[(deviceName, deviceType)] = pd.DataFrame(output_details, columns=['outputName', 'componentName', 'unit'])
-                self._device_details = pd.concat(devDetailsDict, names=['deviceName', 'deviceType', 'oIdx']).reset_index().drop(columns=['oIdx'])
-                self._device_details.loc[:, 'name'] = self._device_details.apply(lambda x: f"{x['deviceName']} - {x['outputName']} - {x['componentName']}", axis='columns')
-                self._device_details.loc[:, 'channel_index'] = self._device_details.index
-                
-                group_name_list = ['deviceName', 'deviceType']
-                for (devName, devType), group in self._device_details.groupby(group_name_list, sort=False):
-                    columnsToSave = [cN for cN in group.columns if cN not in group_name_list]
-                    channel_info = group.loc[:, columnsToSave].apply(lambda x: x.to_dict(), axis='columns').to_list()
-                    subFramesPerFrame = int(deviceNames2SampleRate[devName] / self.marker_sample_rate)
-                    this_spec = {
-                        'streamtype': 'analogsignal',
-                        'sample_rate': deviceNames2SampleRate[devName],
-                        'subFramesPerFrame': subFramesPerFrame,
-                        'vicon_type': 'device',
-                        'device_type': devType,
-                        'channel_info': channel_info,
-                        'nb_channel': group.shape[0],
-                        'shape': (-1,  group.shape[0]),
-                        'dtype': _dtype_analogsignal,
-                        'fill': _analogsignal_filler,
-                        'nip_sample_period': int(3e4 / deviceNames2SampleRate[devName]),
-                        'buffer_size': pyacq_buffer_size * subFramesPerFrame
-                        }
-                    self.output_specs[devName] = this_spec
-                    self.outputs[devName] = OutputStream(spec=this_spec, node=self, name=devName)
-        except ViconDataStream.DataStreamException as e:
-            print('Handled data stream error', e)
+                self.vicon_client.SetAxisMapping(*self.axis_map)
+                self.xAxis, self.yAxis, self.zAxis = self.vicon_client.GetAxisMapping()
+                if self.verbose:
+                    print( 'X Axis', self.xAxis, 'Y Axis', self.yAxis, 'Z Axis', self.zAxis )
+
+                self.outputs = {}
+                self.output_specs = {}
+
+                if sample_rate_info_json_path is None:
+                    sample_rate_info_json_path = os.path.join(Path(__file__).parent, 'vicon_grouping.json')
+                with open(sample_rate_info_json_path, 'r') as f:
+                    sample_rate_info = json.load(f)['grouping_info']
+                deviceNames2SampleRate = {}
+                for info_dict in sample_rate_info:
+                    this_sr = info_dict['sample_rate']
+                    these_dev_names = info_dict['grouping_args']['deviceName']
+                    for dev_name in these_dev_names:
+                        deviceNames2SampleRate[dev_name] = this_sr
+                    
+                self.marker_sample_rate = self.vicon_client.GetFrameRate()
+                self.subjectNames = self.vicon_client.GetSubjectNames()
+                self.all_markers_info = {}
+                self.all_device_output_details = {}
+                if 'markers' in self.requested_signal_types:
+                    for subjectName in self.subjectNames:
+                        if output_name_list is not None:
+                            if subjectName not in output_name_list:
+                                continue
+                        # for markerName, parentSegment in self.vicon_client.GetMarkerNames(subjectName):
+                        markers_info = self.vicon_client.GetMarkerNames(subjectName)
+                        self.all_markers_info[subjectName] = markers_info
+                        chan_idx = 0
+                        channel_info = []
+                        for mi in markers_info:
+                            for coord in ['X', 'Y', 'Z']:
+                                channel_info.append({
+                                    'markerName': mi[0],
+                                    'segment': mi[1], 
+                                    'subjectName': subjectName,
+                                    'coord': coord,
+                                    'name': f"{subjectName}:{mi[0]}:{coord}",
+                                    'channel_index': chan_idx
+                                    })
+                                chan_idx += 1
+                        this_spec = {
+                            'streamtype': 'analogsignal',
+                            'sample_rate': self.marker_sample_rate,
+                            'vicon_type': 'marker',
+                            'nb_channel': 3 * len(markers_info), # custom dtype of (x, y, z and occluded flag)
+                            'shape': (-1, 3 * len(markers_info)),
+                            'dtype': _dtype_analogsignal,
+                            'fill': _analogsignal_filler,
+                            'buffer_size': pyacq_buffer_size,
+                            'subFramesPerFrame': 1,
+                            'nip_sample_period': int(3e4 / self.marker_sample_rate),
+                            'channel_info': channel_info}
+                        self.output_specs[subjectName] = this_spec
+                        self.outputs[subjectName] = OutputStream(spec=this_spec, node=self, name=subjectName)
+                if 'devices' in self.requested_signal_types:
+                    devDetailsDict = {}
+                    # pdb.set_trace()
+                    listOfDevices = '\n'.join([dn[0] for dn in self.vicon_client.GetDeviceNames()])
+                    print(f'presentDevices:\n{listOfDevices}')
+                    # self.vicon_client.GetDeviceNames()
+                    for deviceName, deviceType in self.vicon_client.GetDeviceNames():
+                        if output_name_list is not None:
+                            if deviceName not in output_name_list:
+                                continue
+                        output_details = self.vicon_client.GetDeviceOutputDetails(deviceName)
+                        self.all_device_output_details[deviceName] = output_details
+                        devDetailsDict[(deviceName, deviceType)] = pd.DataFrame(output_details, columns=['outputName', 'componentName', 'unit'])
+                    self._device_details = pd.concat(devDetailsDict, names=['deviceName', 'deviceType', 'oIdx']).reset_index().drop(columns=['oIdx'])
+                    self._device_details.loc[:, 'name'] = self._device_details.apply(lambda x: f"{x['deviceName']} - {x['outputName']} - {x['componentName']}", axis='columns')
+                    self._device_details.loc[:, 'channel_index'] = self._device_details.index
+                    
+                    group_name_list = ['deviceName', 'deviceType']
+                    for (devName, devType), group in self._device_details.groupby(group_name_list, sort=False):
+                        columnsToSave = [cN for cN in group.columns if cN not in group_name_list]
+                        channel_info = group.loc[:, columnsToSave].apply(lambda x: x.to_dict(), axis='columns').to_list()
+                        subFramesPerFrame = int(deviceNames2SampleRate[devName] / self.marker_sample_rate)
+                        this_spec = {
+                            'streamtype': 'analogsignal',
+                            'sample_rate': deviceNames2SampleRate[devName],
+                            'subFramesPerFrame': subFramesPerFrame,
+                            'vicon_type': 'device',
+                            'device_type': devType,
+                            'channel_info': channel_info,
+                            'nb_channel': group.shape[0],
+                            'shape': (-1,  group.shape[0]),
+                            'dtype': _dtype_analogsignal,
+                            'fill': _analogsignal_filler,
+                            'nip_sample_period': int(3e4 / deviceNames2SampleRate[devName]),
+                            'buffer_size': pyacq_buffer_size * subFramesPerFrame
+                            }
+                        self.output_specs[devName] = this_spec
+                        self.outputs[devName] = OutputStream(spec=this_spec, node=self, name=devName)
+                break
+            except Exception as e:
+                print(f'Attempt {attempt_idx}: Error')
+                traceback.print_exc()
 
 
     def _initialize(self, **kargs):
@@ -419,7 +422,7 @@ class ViconClientThread(QT.QThread):
         self.verbose = self.node.verbose
         self.refresh_rate = self.node.refresh_rate
         self.refresh_period = (self.refresh_rate) ** (-1)
-        self.marker_sample_rate =self.node.marker_sample_rate
+        self.marker_sample_rate = self.node.marker_sample_rate
         self.subjectNames = self.node.subjectNames.copy()
         self.all_markers_info = self.node.all_markers_info.copy()
         self.all_device_output_details = self.node.all_device_output_details

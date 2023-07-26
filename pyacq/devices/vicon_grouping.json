@@ -44,6 +44,18 @@
             "grouping_args": {
                 "deviceName": ["Unnamed Device 20"]
             }
+        },
+        {
+            "sample_rate": 200,
+            "grouping_args": {
+                "deviceName": ["Unnamed Device 23"]
+            }
+        },
+        {
+            "sample_rate": 2000,
+            "grouping_args": {
+                "deviceName": ["Unnamed Device 22"]
+            }
         }
     ]
 }
