@@ -26,6 +26,7 @@ from pyacq.core import (Node, ThreadPollInput, RingBuffer)
 LOGGING = False
 logger = logging.getLogger(__name__)
 
+
 class InputStreamEventAndEpochSourceNode(BaseSpikeSource, Node):
     
     _input_specs = {'in': {}}

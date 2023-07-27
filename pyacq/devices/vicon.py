@@ -63,6 +63,7 @@ _dtype_vicon_marker_position = [
     ('z', 'float64', (1,)),
     ('occluded', 'bool', (1,))
     ]
+
 '''
     Vicon DataStream SDK client.`
 
@@ -112,8 +113,7 @@ class Vicon(Node):
     perform computations, or display user interfaces. Each node may have multiple
     input and output streams that connect to other nodes. For example::
     
-       [ data acquisition node ] -> [ processing node ] -> [ display node ]
-                                                        -> [ recording node ]
+       [ data acquisition node ] -> [ processing node ] -> [ display node ] -> [ recording node ]
     
     An application may directly create and connect the Nodes it needs, or it
     may use a Manager to create a network of nodes distributed across multiple
@@ -174,11 +174,11 @@ class Vicon(Node):
         Node.__init__(self, name=name, parent=parent)
     
     def _configure(
-        self, ip_address="localhost", port="",
-        vicon_buffer_size=3, pyacq_buffer_size=3000,
-        stream_mode=None, axis_map=None, refresh_rate=100,
-        sample_rate_info_json_path=None, output_name_list=None,
-        **kargs):
+            self, ip_address="localhost", port="",
+            vicon_buffer_size=3, pyacq_buffer_size=3000,
+            stream_mode=None, axis_map=None, refresh_rate=100,
+            sample_rate_info_json_path=None, output_name_list=None,
+            **kargs):
         """This method is called during `Node.configure()` and must be
         reimplemented by subclasses.
         """
@@ -623,7 +623,8 @@ class ViconRetimingClientThread(QT.QThread):
         with self.lock:
             self.running = True
         
-        '''stream = self.node.outputs['aichannels']
+        '''
+        stream = self.node.outputs['aichannels']
         ai_channels = np.array(self.node.ai_channels, dtype='uint16')
         trialcont = self.node.trialcont
         ai_buffer = self.node.ai_buffer
@@ -716,8 +717,7 @@ class ViconRxBuffer(Node):
     perform computations, or display user interfaces. Each node may have multiple
     input and output streams that connect to other nodes. For example::
     
-       [ data acquisition node ] -> [ processing node ] -> [ display node ]
-                                                        -> [ recording node ]
+       [ data acquisition node ] -> [ processing node ] -> [ display node ] -> [ recording node ]
     
     An application may directly create and connect the Nodes it needs, or it
     may use a Manager to create a network of nodes distributed across multiple
