@@ -39,8 +39,6 @@ from ephyviewer.myqt import QT, QT_LIB
 from PySide6.QtWebSockets import QWebSocket
 from pyqtgraph.util.mutex import Mutex
 from contextlib import nullcontext
-
-
 import array
 import ctypes
 import itertools
@@ -122,7 +120,7 @@ ripple_fe_types = ['macro'] # TODO: iterate front end types
 _dtype_segmentDataPacket = [
     ('timestamp', 'int64', (1,)), ('channel', 'int', (1,)),
     ('wf', 'int', (52,)), ('class_id', 'int', (1,))]
-#
+
 _xp_spk = DummySegmentDataPacket()
 ripple_event_filler = np.array([(
     _xp_spk.timestamp, 0,
@@ -829,93 +827,6 @@ class XipppyThread(QT.QThread):
             self.running = False
 
 
-class RippleThreadStreamConverter(ThreadPollInput):
-    """Thread that polls for data on an input stream and converts the transfer
-    mode or time axis of the data before relaying it through its output.
-    """
-    def __init__(
-            self, input_stream, output_stream,
-            signal_type=None, nip_sample_period=None,
-            timeout=200, parent=None):
-        ThreadPollInput.__init__(
-            self, input_stream, timeout=timeout,
-            return_data=True, parent=parent)
-        self.output_stream = weakref.ref(output_stream)
-        self.signal_type = signal_type
-        self.nip_sample_period = nip_sample_period
-        self.output_dtype = make_dtype(self.output_stream().params['dtype'])
-        
-    def process_data(self, pos, data):
-        if self.signal_type == 'analog':
-            output = data['value']
-            self.output_stream().send(output, index=pos)
-        elif self.signal_type == 'events':
-            mask = data['channel'] == 13
-            output = np.sort(data['timestamp'][mask] / self.nip_sample_period).astype(self.output_dtype)
-            # print(f"stream convert trig {output}")
-            self.output_stream().send(output, index=pos)
-
-
-class RippleStreamAdapter(Node):
-
-    _input_specs = {
-        'signals': {
-            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
-            'compression': '', 'fill': _analogsignal_filler},
-        'events' : {
-            'streamtype': 'event', 'shape': (-1,),
-            'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
-        }
-    _output_specs = {
-        'signals': {
-            'streamtype': 'analogsignal', 'dtype': 'float64',
-            'compression': '', 'fill': 0., },
-        'events' : {
-            'streamtype': 'event', 'shape': (-1,),
-            'fill': ripple_event_filler, 'dtype': 'int64',}, 
-        }
-    
-    def __init__(self, **kargs):
-        Node.__init__(self, **kargs)
-        self.threads = {}
-    
-    def _configure(self):
-        pass
-
-    def _initialize(self):
-        self.sample_rate = self.inputs['signals'].params['sample_rate']
-        self.nip_sample_period  = self.inputs['signals'].params['nip_sample_period']
-        for param_name in ['sample_rate', 'nip_sample_period', 'shape']:
-            self.outputs['signals'].params[param_name] = self.inputs['signals'].params[param_name]
-        #
-        self.threads['signals'] = RippleThreadStreamConverter(
-            self.inputs['signals'], self.outputs['signals'],
-            signal_type='analog', nip_sample_period=self.nip_sample_period)
-        self.threads['events'] = RippleThreadStreamConverter(
-            self.inputs['events'], self.outputs['events'],
-            signal_type='events', nip_sample_period=self.nip_sample_period)
-        # print(f"self.outputs['signals'].params['shape'] = {self.outputs['signals'].params['shape']}")
-        # print(f"self.outputs['events'].params.keys() = {self.outputs['events'].params.keys()}")
-        # print(f"self.inputs['signals'].params['shape'] = {self.inputs['signals'].params['shape']}")
-        # print(f"self.inputs['events'].params.keys() = {self.inputs['events'].params.keys()}")
-    
-    def _start(self):
-        self.threads['signals'].start()
-        self.threads['events'].start()
-
-    def _stop(self):
-        self.threads['signals'].stop()
-        self.threads['signals'].wait()
-        self.threads['events'].stop()
-        self.threads['events'].wait()
-    
-    def _close(self):
-        pass
-
-
-register_node_type(RippleStreamAdapter)
-
-
 class PyacqServerWindow(QT.QMainWindow):
     '''  '''
 
@@ -1047,4 +958,96 @@ class StimPacketReceiver(Node):
             except Exception:
                 traceback.print_exc()
 
+
 register_node_type(StimPacketReceiver)
+
+
+'''
+
+class RippleThreadStreamConverter(ThreadPollInput):
+    """Thread that polls for data on an input stream and converts the transfer
+    mode or time axis of the data before relaying it through its output.
+    """
+    def __init__(
+            self, input_stream, output_stream,
+            signal_type=None, nip_sample_period=None,
+            timeout=200, parent=None):
+        ThreadPollInput.__init__(
+            self, input_stream, timeout=timeout,
+            return_data=True, parent=parent)
+        self.output_stream = weakref.ref(output_stream)
+        self.signal_type = signal_type
+        self.nip_sample_period = nip_sample_period
+        self.output_dtype = make_dtype(self.output_stream().params['dtype'])
+        
+    def process_data(self, pos, data):
+        if self.signal_type == 'analog':
+            output = data['value']
+            self.output_stream().send(output, index=pos)
+        elif self.signal_type == 'events':
+            mask = data['channel'] == 13
+            output = np.sort(data['timestamp'][mask] / self.nip_sample_period).astype(self.output_dtype)
+            # print(f"stream convert trig {output}")
+            self.output_stream().send(output, index=pos)
+
+
+class RippleStreamAdapter(Node):
+
+    _input_specs = {
+        'signals': {
+            'streamtype': 'analogsignal', 'dtype': _dtype_analogsignal,
+            'compression': '', 'fill': _analogsignal_filler},
+        'events' : {
+            'streamtype': 'event', 'shape': (-1,),
+            'fill': ripple_event_filler, 'dtype': _dtype_segmentDataPacket},
+        }
+    _output_specs = {
+        'signals': {
+            'streamtype': 'analogsignal', 'dtype': 'float64',
+            'compression': '', 'fill': 0., },
+        'events' : {
+            'streamtype': 'event', 'shape': (-1,),
+            'fill': ripple_event_filler, 'dtype': 'int64',}, 
+        }
+    
+    def __init__(self, **kargs):
+        Node.__init__(self, **kargs)
+        self.threads = {}
+    
+    def _configure(self):
+        pass
+
+    def _initialize(self):
+        self.sample_rate = self.inputs['signals'].params['sample_rate']
+        self.nip_sample_period  = self.inputs['signals'].params['nip_sample_period']
+        for param_name in ['sample_rate', 'nip_sample_period', 'shape']:
+            self.outputs['signals'].params[param_name] = self.inputs['signals'].params[param_name]
+        #
+        self.threads['signals'] = RippleThreadStreamConverter(
+            self.inputs['signals'], self.outputs['signals'],
+            signal_type='analog', nip_sample_period=self.nip_sample_period)
+        self.threads['events'] = RippleThreadStreamConverter(
+            self.inputs['events'], self.outputs['events'],
+            signal_type='events', nip_sample_period=self.nip_sample_period)
+        # print(f"self.outputs['signals'].params['shape'] = {self.outputs['signals'].params['shape']}")
+        # print(f"self.outputs['events'].params.keys() = {self.outputs['events'].params.keys()}")
+        # print(f"self.inputs['signals'].params['shape'] = {self.inputs['signals'].params['shape']}")
+        # print(f"self.inputs['events'].params.keys() = {self.inputs['events'].params.keys()}")
+    
+    def _start(self):
+        self.threads['signals'].start()
+        self.threads['events'].start()
+
+    def _stop(self):
+        self.threads['signals'].stop()
+        self.threads['signals'].wait()
+        self.threads['events'].stop()
+        self.threads['events'].wait()
+    
+    def _close(self):
+        pass
+
+
+register_node_type(RippleStreamAdapter)
+
+'''

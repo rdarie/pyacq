@@ -33,6 +33,7 @@ vicon_enable_fun_names = {
     'devices': "EnableDeviceData",
     'centroids': "EnableCentroidData"
 }
+
 vicon_signal_names = {
     'segments': "Segment",
     'markers': "Marker",
@@ -608,106 +609,6 @@ class ViconClientThread(QT.QThread):
             self.running = False
 
 
-class ViconRetimingClientThread(QT.QThread):
-    """
-    Vicon thread that grab continuous data.
-    """
-    def __init__(self, node, parent=None):
-        QT.QThread.__init__(self, parent=parent)
-        self.node = node
-
-        self.lock = Mutex()
-        self.running = False
-        
-    def run(self):
-        with self.lock:
-            self.running = True
-        
-        '''
-        stream = self.node.outputs['aichannels']
-        ai_channels = np.array(self.node.ai_channels, dtype='uint16')
-        trialcont = self.node.trialcont
-        ai_buffer = self.node.ai_buffer
-        nInstance = self.node.nInstance
-        nb_channel = self.node.nb_channel
-        cbSdk = self.node.cbSdk
-        
-        n = 0
-        next_timestamp = None
-        first_buffer = True
-        while True:
-            with self.lock:
-                if not self.running:
-                    break
-            
-            # probe buffer size for all channel
-            cbSdk.InitTrialData(nInstance, 1, None, ctypes.byref(trialcont), None, None)
-            
-            if trialcont.count==0:
-                time.sleep(0.003) # a buffer is 10 ms sleep a third
-                continue
-            
-            # samples for some channels
-            num_samples = np.ctypeslib.as_array(trialcont.num_samples)
-            
-            # it is a personnal guess when some channel are less than 300 sample 
-            # then we must waiyt for a while because some packet are not arrived yet.
-            if num_samples[0] < 300:
-                # it is too early!!!!!!
-                time.sleep(0.003)
-                continue
-            
-            # this really get the buffer
-            cbSdk.GetTrialData(nInstance, 1, None, ctypes.byref(trialcont), None, None)
-            
-            if first_buffer:
-                # trash the first buffer because it is a very big one
-                first_buffer = False
-                continue
-            
-            num_samples = np.ctypeslib.as_array(trialcont.num_samples)
-            sample_rates = np.ctypeslib.as_array(trialcont.sample_rates)
-            
-            # maybe this would be safe : to be check
-            # assert np.all(num_samples[0]==num_samples)
-            
-            num_sample = num_samples[0]
-            
-            # here it is a bit tricky because when can received unwanted 
-            # channel so we need to align internal buffer to output buffer
-            # with a mask
-            channels_in_buffer = np.ctypeslib.as_array(trialcont.chan)
-            channel_mask = np.in1d(channels_in_buffer, ai_channels)
-            channel_mask &= (sample_rates==30000)
-            
-            num_samples = num_samples[channel_mask]
-            
-            # 2 case
-            if np.sum(channel_mask)==nb_channel:
-                # all channel are in the buffer: easy just a transpose
-                data = ai_buffer[channel_mask, : num_sample].T.copy()
-            else:
-                #some are not because not configured accordingly in "central"
-                data = np.zeros((num_sample, nb_channel), dtype='int16')
-                outbuffer_channel_mask = np.in1d(ai_channels, channels_in_buffer[channel_mask])
-                data[:, outbuffer_channel_mask] = ai_buffer[channel_mask, : num_sample].T
-                
-            n += data.shape[0]
-            stream.send(data, index=n)
-            
-            # this is for checking missing packet: disable at the moment
-            # if next_timestamp is not None:
-            #    pass
-            # next_timestamp = trialcont.time + num_sample
-            
-            # be nice
-            time.sleep(0)'''
-
-    def stop(self):
-        with self.lock:
-            self.running = False
-
-
 class ViconRxBuffer(Node):
     """
     A Node is the basic element for generating and processing data streams
@@ -868,3 +769,105 @@ class ViconRxBuffer(Node):
     
 
 register_node_type(ViconRxBuffer)
+
+'''
+
+class ViconRetimingClientThread(QT.QThread):
+    """
+    Vicon thread that grab continuous data.
+    """
+    def __init__(self, node, parent=None):
+        QT.QThread.__init__(self, parent=parent)
+        self.node = node
+
+        self.lock = Mutex()
+        self.running = False
+        
+    def run(self):
+        with self.lock:
+            self.running = True
+        
+        ### stream = self.node.outputs['aichannels']
+        ### ai_channels = np.array(self.node.ai_channels, dtype='uint16')
+        ### trialcont = self.node.trialcont
+        ### ai_buffer = self.node.ai_buffer
+        ### nInstance = self.node.nInstance
+        ### nb_channel = self.node.nb_channel
+        ### cbSdk = self.node.cbSdk
+        ### 
+        ### n = 0
+        ### next_timestamp = None
+        ### first_buffer = True
+        ### while True:
+        ###     with self.lock:
+        ###         if not self.running:
+        ###             break
+        ###     
+        ###     # probe buffer size for all channel
+        ###     cbSdk.InitTrialData(nInstance, 1, None, ctypes.byref(trialcont), None, None)
+        ###     
+        ###     if trialcont.count==0:
+        ###         time.sleep(0.003) # a buffer is 10 ms sleep a third
+        ###         continue
+        ###     
+        ###     # samples for some channels
+        ###     num_samples = np.ctypeslib.as_array(trialcont.num_samples)
+        ###     
+        ###     # it is a personnal guess when some channel are less than 300 sample 
+        ###     # then we must waiyt for a while because some packet are not arrived yet.
+        ###     if num_samples[0] < 300:
+        ###         # it is too early!!!!!!
+        ###         time.sleep(0.003)
+        ###         continue
+        ###     
+        ###     # this really get the buffer
+        ###     cbSdk.GetTrialData(nInstance, 1, None, ctypes.byref(trialcont), None, None)
+        ###     
+        ###     if first_buffer:
+        ###         # trash the first buffer because it is a very big one
+        ###         first_buffer = False
+        ###         continue
+        ###     
+        ###     num_samples = np.ctypeslib.as_array(trialcont.num_samples)
+        ###     sample_rates = np.ctypeslib.as_array(trialcont.sample_rates)
+        ###     
+        ###     # maybe this would be safe : to be check
+        ###     # assert np.all(num_samples[0]==num_samples)
+        ###     
+        ###     num_sample = num_samples[0]
+        ###     
+        ###     # here it is a bit tricky because when can received unwanted 
+        ###     # channel so we need to align internal buffer to output buffer
+        ###     # with a mask
+        ###     channels_in_buffer = np.ctypeslib.as_array(trialcont.chan)
+        ###     channel_mask = np.in1d(channels_in_buffer, ai_channels)
+        ###     channel_mask &= (sample_rates==30000)
+        ###     
+        ###     num_samples = num_samples[channel_mask]
+        ###     
+        ###     # 2 case
+        ###     if np.sum(channel_mask)==nb_channel:
+        ###         # all channel are in the buffer: easy just a transpose
+        ###         data = ai_buffer[channel_mask, : num_sample].T.copy()
+        ###     else:
+        ###         #some are not because not configured accordingly in "central"
+        ###         data = np.zeros((num_sample, nb_channel), dtype='int16')
+        ###         outbuffer_channel_mask = np.in1d(ai_channels, channels_in_buffer[channel_mask])
+        ###         data[:, outbuffer_channel_mask] = ai_buffer[channel_mask, : num_sample].T
+        ###         
+        ###     n += data.shape[0]
+        ###     stream.send(data, index=n)
+        ###     
+        ###     # this is for checking missing packet: disable at the moment
+        ###     # if next_timestamp is not None:
+        ###     #    pass
+        ###     # next_timestamp = trialcont.time + num_sample
+        ###     
+        ###     # be nice
+        ###     time.sleep(0)
+
+    def stop(self):
+        with self.lock:
+            self.running = False
+'''
+

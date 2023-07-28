@@ -26,237 +26,6 @@ from pyacq.core import (Node, ThreadPollInput, RingBuffer)
 LOGGING = False
 logger = logging.getLogger(__name__)
 
-
-class InputStreamEventAndEpochSourceNode(BaseSpikeSource, Node):
-    
-    _input_specs = {'in': {}}
-    _output_specs = {'out': {}}
-
-    def __init__(
-            self, **kargs):
-        BaseEventAndEpoch.__init__(self)
-        Node.__init__(self, **kargs)
-        self._t_start = 0
-        self._t_stop = 0
-    
-    def _configure(
-        self, 
-        get_with_copy=False, get_with_join=True,
-        return_type='spikes', buffer_size=500):
-        self.get_with_copy = get_with_copy
-        self.get_with_join = get_with_join
-        self.return_type = return_type
-        self.buffer_size = buffer_size
-    
-    def _initialize(self):
-        self.channel_names = []
-        self.channel_indexes = []
-        for list_idx, chan_info in enumerate(self.input.params['channel_info']):
-            if 'channel_index' in chan_info:
-                chanIdx = chan_info['channel_index']
-            else:
-                chanIdx = list_idx
-            self.channel_indexes.append(chanIdx)
-            if 'name' in chan_info:
-                self.channel_names.append(chan_info['name'])
-            else:
-                self.channel_names.append('{}_{}'.format(self.input.name, chanIdx))
-        #
-        self.sorted_by_time = self.input.params['sorted_by_time']
-        bufferParams = {
-            key: self.input.params[key]
-            for key in ['double', 'axisorder', 'fill']}
-        bufferParams['shmem'] = True if (self.input.params['transfermode'] == 'sharedmem') else None
-        self.buffers_by_channel = {
-            chanIdx: RingBuffer(
-                shape=(self.buffer_size,),
-                dtype=self.input.params['dtype'],
-                **bufferParams)
-            for chanIdx in self.channel_indexes
-            }
-        self.poller = ThreadPollInput(self.input, return_data=True)
-        self.poller.new_data.connect(self.event_received)
-
-    def event_received(self, ptr, data):
-        # print("Event data received: %d %s" % (ptr, data.shape))
-        if self.sorted_by_time:
-            # sort by channel instead
-            sort_indices = np.argsort(data['channel'].flatten())
-            data = data[sort_indices]
-        # Get the indices where shifts (IDs change) occur
-        unique_chans, cut_idx = np.unique(data['channel'].flatten(), return_index=True)
-        grouped = np.split(data, cut_idx)[1:]
-        for chanIdx, group in zip(unique_chans, grouped):
-            self.buffers_by_channel[chanIdx].new_chunk(group)
-            #~print(f'{chanIdx}; {group.shape}')
-        #~print('---------')
-        return
-
-    def _start(self):
-        self.poller.start()
-
-    def _stop(self):
-        self.poller.stop()
-        self.poller.wait()
-    
-    def _close(self):
-        if self.running():
-            self.stop()
-
-    @property
-    def nb_channel(self):
-        return self.input.params['nb_channel']
-        
-    @property
-    def t_start(self):
-        return self._t_start
-
-    @property
-    def t_stop(self):
-        return self._t_stop
-
-    def get_channel_name(self, chan=0):
-        return self.channel_names[chan]
-
-    def get_size(self, chan=0):
-        return
-
-    def get_chunk(self, chan=0, i_start=None, i_stop=None):
-        chanIdx = self.channel_indexes[chan]
-        this_buffer = self.buffers_by_channel[chanIdx]
-        sig_chunk = this_buffer.get_data(
-            i_start, i_stop,
-            copy=self.get_with_copy, join=self.get_with_join)
-        #
-        ev_times = sig_chunk['timestamp'] / 3e4
-        if self.return_type == 'spikes':
-            return ev_times
-        ev_labels = sig_chunk['class_id']
-        if self.return_type == 'events':
-            return ev_times, ev_labels
-        ev_durations = np.ones(ev_times.shape) * 1e-3
-        if self.return_type == 'epochs':
-            return ev_times, ev_durations, ev_labels
-
-    def get_chunk_by_time(
-            self, chan=0,
-            t_start=None, t_stop=None):
-        chanIdx = self.channel_indexes[chan]
-        this_buffer = self.buffers_by_channel[chanIdx]
-        sig_chunk = this_buffer.get_data(
-            this_buffer.first_index(), this_buffer.index(),
-            copy=self.get_with_copy, join=self.get_with_join)
-        all_times = sig_chunk['timestamp'] / 3e4
-        # print(all_times)
-        timeMask = (all_times >= t_start) & (all_times < t_stop)
-        ev_times = all_times[timeMask]
-        # i1 = np.searchsorted(all_times, t_start, side='left')
-        # i2 = np.searchsorted(all_times, t_stop, side='left')
-        # sl = slice(i1, i2+1)
-        # ev_times = all_times[sl]
-        if self.return_type == 'spikes':
-            return ev_times
-        ev_labels = this_buffer.buffer['class_id'][timeMask]
-        if self.return_type == 'events':
-            return ev_times, ev_labels
-        ev_durations = np.ones(ev_times.shape) * 1e-3
-        if self.return_type == 'epochs':
-            return ev_times, ev_durations, ev_labels
-
-
-class InputStreamAnalogSignalSourceNode(BaseAnalogSignalSource, Node):
-
-    _input_specs = {'in': {}}
-    _output_specs = {'out': {}}
-
-    def __init__(self, **kargs):
-        BaseAnalogSignalSource.__init__(self)
-        Node.__init__(self, **kargs)
-        self._t_start = 0
-        self._t_stop = 0
-
-    def _configure(
-        self,
-        get_with_copy=False, get_with_join=True):
-        #
-        self.get_with_copy = get_with_copy
-        self.get_with_join = get_with_join
-        #
-    def _initialize(self):
-        self.has_custom_dtype = self.input.params['dtype'].names is not None
-        self.sample_rate = float(self.input.params['sample_rate'])
-        self.reference_signal = None
-        # set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None)
-        bufferParams = {
-            key: self.input.params[key] for key in ['double', 'axisorder', 'fill']}
-        bufferParams['size'] = self.input.params['buffer_size']
-        if (self.input.params['transfermode'] == 'sharedmem'):
-            if 'shm_id' in self.input.params:
-                bufferParams['shmem'] = self.input.params['shm_id']
-            else:
-                bufferParams['shmem'] = True
-        else:
-            bufferParams['shmem'] = None
-        self.input.set_buffer(**bufferParams)
-        # There are many ways to poll for data from the input stream. In this
-        # case, we will use a background thread to monitor the stream and emit
-        # a Qt signal whenever data is available.
-        self.poller = ThreadPollInput(self.input)
-        # self.pollers[inputname].new_data.connect(self.analogsignal_received)
-        #
-        self._t_start = 0.
-        self._t_stop = self.input.buffer.shape[0] / self.sample_rate + self._t_start
-        #
-        self.channel_names = []
-        self.channel_indexes = []
-        for list_idx, chan_info in enumerate(self.input.params['channel_info']):
-            if 'channel_index' in chan_info:
-                chanIdx = chan_info['channel_index']
-            else:
-                chanIdx = list_idx
-            self.channel_indexes.append(chanIdx)
-            if 'name' in chan_info:
-                self.channel_names.append(chan_info['name'])
-            else:
-                self.channel_names.append('{}_{}'.format(self.input.name, chanIdx))
-        self.signals = self.input.buffer
-        return
-
-    @property
-    def nb_channel(self):
-        return self.input.buffer.shape[1]
-
-    def get_channel_name(self, chan=0):
-        return self.channel_names[chan]
-
-    @property
-    def t_start(self):
-        return self._t_start
-
-    @property
-    def t_stop(self):
-        return self._t_stop
-
-    def get_length(self):
-        return self.input.buffer.shape[0]
-
-    def get_chunk(self, i_start=None, i_stop=None):
-        # print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
-        '''
-        start, stop = (
-            self.signals._interpret_index(i_start),
-            self.signals._interpret_index(i_stop))
-            '''
-        sig_chunk = self.input.get_data(
-            i_start, i_stop,
-            copy=self.get_with_copy, join=self.get_with_join)
-        if self.has_custom_dtype:
-            sig_chunk = sig_chunk['value']
-        if self.reference_signal is not None:
-            sig_chunk = sig_chunk - sig_chunk[:, self.reference_signal][:, None]
-        return sig_chunk
-   
-
 class InputStreamEventAndEpochSource(BaseSpikeSource, QT.QObject):
     
     def __init__(
@@ -1009,3 +778,234 @@ class SeekTimer(QT.QThread):
     def stop(self):
         with self.lock:
             self.running = False
+
+'''
+
+class InputStreamEventAndEpochSourceNode(BaseSpikeSource, Node):
+    
+    _input_specs = {'in': {}}
+    _output_specs = {'out': {}}
+
+    def __init__(
+            self, **kargs):
+        BaseEventAndEpoch.__init__(self)
+        Node.__init__(self, **kargs)
+        self._t_start = 0
+        self._t_stop = 0
+    
+    def _configure(
+        self, 
+        get_with_copy=False, get_with_join=True,
+        return_type='spikes', buffer_size=500):
+        self.get_with_copy = get_with_copy
+        self.get_with_join = get_with_join
+        self.return_type = return_type
+        self.buffer_size = buffer_size
+    
+    def _initialize(self):
+        self.channel_names = []
+        self.channel_indexes = []
+        for list_idx, chan_info in enumerate(self.input.params['channel_info']):
+            if 'channel_index' in chan_info:
+                chanIdx = chan_info['channel_index']
+            else:
+                chanIdx = list_idx
+            self.channel_indexes.append(chanIdx)
+            if 'name' in chan_info:
+                self.channel_names.append(chan_info['name'])
+            else:
+                self.channel_names.append('{}_{}'.format(self.input.name, chanIdx))
+        #
+        self.sorted_by_time = self.input.params['sorted_by_time']
+        bufferParams = {
+            key: self.input.params[key]
+            for key in ['double', 'axisorder', 'fill']}
+        bufferParams['shmem'] = True if (self.input.params['transfermode'] == 'sharedmem') else None
+        self.buffers_by_channel = {
+            chanIdx: RingBuffer(
+                shape=(self.buffer_size,),
+                dtype=self.input.params['dtype'],
+                **bufferParams)
+            for chanIdx in self.channel_indexes
+            }
+        self.poller = ThreadPollInput(self.input, return_data=True)
+        self.poller.new_data.connect(self.event_received)
+
+    def event_received(self, ptr, data):
+        # print("Event data received: %d %s" % (ptr, data.shape))
+        if self.sorted_by_time:
+            # sort by channel instead
+            sort_indices = np.argsort(data['channel'].flatten())
+            data = data[sort_indices]
+        # Get the indices where shifts (IDs change) occur
+        unique_chans, cut_idx = np.unique(data['channel'].flatten(), return_index=True)
+        grouped = np.split(data, cut_idx)[1:]
+        for chanIdx, group in zip(unique_chans, grouped):
+            self.buffers_by_channel[chanIdx].new_chunk(group)
+            #~print(f'{chanIdx}; {group.shape}')
+        #~print('---------')
+        return
+
+    def _start(self):
+        self.poller.start()
+
+    def _stop(self):
+        self.poller.stop()
+        self.poller.wait()
+    
+    def _close(self):
+        if self.running():
+            self.stop()
+
+    @property
+    def nb_channel(self):
+        return self.input.params['nb_channel']
+        
+    @property
+    def t_start(self):
+        return self._t_start
+
+    @property
+    def t_stop(self):
+        return self._t_stop
+
+    def get_channel_name(self, chan=0):
+        return self.channel_names[chan]
+
+    def get_size(self, chan=0):
+        return
+
+    def get_chunk(self, chan=0, i_start=None, i_stop=None):
+        chanIdx = self.channel_indexes[chan]
+        this_buffer = self.buffers_by_channel[chanIdx]
+        sig_chunk = this_buffer.get_data(
+            i_start, i_stop,
+            copy=self.get_with_copy, join=self.get_with_join)
+        #
+        ev_times = sig_chunk['timestamp'] / 3e4
+        if self.return_type == 'spikes':
+            return ev_times
+        ev_labels = sig_chunk['class_id']
+        if self.return_type == 'events':
+            return ev_times, ev_labels
+        ev_durations = np.ones(ev_times.shape) * 1e-3
+        if self.return_type == 'epochs':
+            return ev_times, ev_durations, ev_labels
+
+    def get_chunk_by_time(
+            self, chan=0,
+            t_start=None, t_stop=None):
+        chanIdx = self.channel_indexes[chan]
+        this_buffer = self.buffers_by_channel[chanIdx]
+        sig_chunk = this_buffer.get_data(
+            this_buffer.first_index(), this_buffer.index(),
+            copy=self.get_with_copy, join=self.get_with_join)
+        all_times = sig_chunk['timestamp'] / 3e4
+        # print(all_times)
+        timeMask = (all_times >= t_start) & (all_times < t_stop)
+        ev_times = all_times[timeMask]
+        # i1 = np.searchsorted(all_times, t_start, side='left')
+        # i2 = np.searchsorted(all_times, t_stop, side='left')
+        # sl = slice(i1, i2+1)
+        # ev_times = all_times[sl]
+        if self.return_type == 'spikes':
+            return ev_times
+        ev_labels = this_buffer.buffer['class_id'][timeMask]
+        if self.return_type == 'events':
+            return ev_times, ev_labels
+        ev_durations = np.ones(ev_times.shape) * 1e-3
+        if self.return_type == 'epochs':
+            return ev_times, ev_durations, ev_labels
+
+
+class InputStreamAnalogSignalSourceNode(BaseAnalogSignalSource, Node):
+
+    _input_specs = {'in': {}}
+    _output_specs = {'out': {}}
+
+    def __init__(self, **kargs):
+        BaseAnalogSignalSource.__init__(self)
+        Node.__init__(self, **kargs)
+        self._t_start = 0
+        self._t_stop = 0
+
+    def _configure(
+        self,
+        get_with_copy=False, get_with_join=True):
+        #
+        self.get_with_copy = get_with_copy
+        self.get_with_join = get_with_join
+        #
+    def _initialize(self):
+        self.has_custom_dtype = self.input.params['dtype'].names is not None
+        self.sample_rate = float(self.input.params['sample_rate'])
+        self.reference_signal = None
+        # set_buffer(self, size=None, double=True, axisorder=None, shmem=None, fill=None)
+        bufferParams = {
+            key: self.input.params[key] for key in ['double', 'axisorder', 'fill']}
+        bufferParams['size'] = self.input.params['buffer_size']
+        if (self.input.params['transfermode'] == 'sharedmem'):
+            if 'shm_id' in self.input.params:
+                bufferParams['shmem'] = self.input.params['shm_id']
+            else:
+                bufferParams['shmem'] = True
+        else:
+            bufferParams['shmem'] = None
+        self.input.set_buffer(**bufferParams)
+        # There are many ways to poll for data from the input stream. In this
+        # case, we will use a background thread to monitor the stream and emit
+        # a Qt signal whenever data is available.
+        self.poller = ThreadPollInput(self.input)
+        # self.pollers[inputname].new_data.connect(self.analogsignal_received)
+        #
+        self._t_start = 0.
+        self._t_stop = self.input.buffer.shape[0] / self.sample_rate + self._t_start
+        #
+        self.channel_names = []
+        self.channel_indexes = []
+        for list_idx, chan_info in enumerate(self.input.params['channel_info']):
+            if 'channel_index' in chan_info:
+                chanIdx = chan_info['channel_index']
+            else:
+                chanIdx = list_idx
+            self.channel_indexes.append(chanIdx)
+            if 'name' in chan_info:
+                self.channel_names.append(chan_info['name'])
+            else:
+                self.channel_names.append('{}_{}'.format(self.input.name, chanIdx))
+        self.signals = self.input.buffer
+        return
+
+    @property
+    def nb_channel(self):
+        return self.input.buffer.shape[1]
+
+    def get_channel_name(self, chan=0):
+        return self.channel_names[chan]
+
+    @property
+    def t_start(self):
+        return self._t_start
+
+    @property
+    def t_stop(self):
+        return self._t_stop
+
+    def get_length(self):
+        return self.input.buffer.shape[0]
+
+    def get_chunk(self, i_start=None, i_stop=None):
+        # print('InputStreamAnalogSignalSource; t_start = {:.3f}'.format(self._t_start))
+        # start, stop = (
+        #     self.signals._interpret_index(i_start),
+        #     self.signals._interpret_index(i_stop))
+        sig_chunk = self.input.get_data(
+            i_start, i_stop,
+            copy=self.get_with_copy, join=self.get_with_join)
+        if self.has_custom_dtype:
+            sig_chunk = sig_chunk['value']
+        if self.reference_signal is not None:
+            sig_chunk = sig_chunk - sig_chunk[:, self.reference_signal][:, None]
+        return sig_chunk
+
+'''
